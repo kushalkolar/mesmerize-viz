@@ -72,6 +72,8 @@ class BatchViewer:
 
         self.ds_window = 10
 
+        # Nothing works without this call
+        # I don't know why ¯\_(ツ)_/¯
         self.item_selection_changed()
 
     def _set_frame_slider_width(self, *args):
