@@ -1,11 +1,12 @@
 import numpy as np
 from ipywidgets import widgets, VBox, HBox, Layout
-from fastplotlib import GridPlot, Image
+from fastplotlib import GridPlot, Image, Subplot
 from typing import *
 import pandas as pd
 from uuid import UUID
 from collections import OrderedDict
 import pims
+import time
 
 
 # formats dict to yaml-ish-style
@@ -21,7 +22,30 @@ input_readers = [
 ]
 
 
-class BatchViewer:
+blue_circle = chr(int("0x1f535",base=16))
+green_circle = chr(int("0x1f7e2",base=16))
+red_circle = chr(int("0x1f534",base=16))
+
+
+class _MCorrContainer:
+    def __init__(
+            self,
+            input: Union[Subplot, np.ndarray, Image],
+            mcorr: Union[Subplot, np.ndarray, Image],
+            dsavg: Union[Subplot, np.ndarray, Image],
+            mean: Union[Subplot, np.ndarray, Image],
+            corr: Union[Subplot, np.ndarray, Image],
+            shifts: Union[Subplot, np.ndarray, Image]
+    ):
+        self.input = input
+        self.mcorr = mcorr
+        self.dsavg = dsavg
+        self.mean = mean
+        self.corr = corr
+        self.shifts = shifts
+
+
+class MCorrViewer:
     def __init__(
             self,
             dataframe: pd.DataFrame,
@@ -31,45 +55,57 @@ class BatchViewer:
         self.dataframe: pd.DataFrame = dataframe.reset_index(drop=True)
         self.grid_shape: Tuple[int, int] = None
 
-        self.batch_list_widget_label = widgets.Label(value="batch items:")
+        options = list()
+        for ix, r in self.dataframe.iterrows():
+            if r["outputs"] is None:
+                indicator = blue_circle
+            elif r["outputs"]["success"] is True:
+                indicator = green_circle
+            elif r["outputs"]["success"] is False:
+                indicator = red_circle
+            name = r["name"]
+            options.append(f"{indicator} {name}")
+
         if multi_select:
             self.batch_list_widget: widgets.SelectMultiple = widgets.SelectMultiple(
-                options=self.dataframe["name"].to_list(),
+                options=options,
                 index=0
             )
         else:
             self.batch_list_widget: widgets.Select = widgets.Select(
-                options=self.dataframe["name"].to_list(),
+                options=options,
                 index=0
             )
 
+        self.batch_list_widget.layout = Layout(height="200px")
         self.batch_list_widget.observe(self.item_selection_changed)
 
         self.uuid_text_widget = widgets.Text(disabled=True, tooltip="UUID of item")
         self.params_text_widget = widgets.Textarea(disabled=True, tooltip="Parameters of item")
 
-        self.outputs_text_widget = widgets.Textarea(description="output info", disabled=True, tooltip="Output info of item")
+        self.outputs_text_widget = widgets.Textarea(disabled=True, tooltip="Output info of item")
 
-        self.accordion = widgets.Accordion(children=[self.outputs_text_widget], titles=('output info'))
+        self.grid_plot: GridPlot = GridPlot(shape=(2, 3), controllers="sync")
+        self.subplots = _MCorrContainer(
+            input=self.grid_plot.subplots[0, 0],
+            mcorr=self.grid_plot.subplots[0, 1],
+            dsavg=self.grid_plot.subplots[0, 2],
+            mean=self.grid_plot.subplots[1, 0],
+            corr=self.grid_plot.subplots[1, 1],
+            shifts=self.grid_plot.subplots[1, 2]
+        )
 
-        self.grid_plot: GridPlot = GridPlot(shape=(1, 3), controllers=np.array([[0, 0, 0]]))
         self.frame_slider = widgets.IntSlider(value=0, min=0, description="frame index:")
         self.grid_plot.renderer.add_event_handler(self._set_frame_slider_width, "resize")
 
         self.frame_slider.observe(self.update_frame, "value")
 
+        self.button_reset_view = widgets.Button(description="Reset View")
+        self.button_reset_view.on_click(self.reset_grid_plot_scenes)
+
         # this should become dynamic later
-        self.current_movies: OrderedDict[str, np.ndarray] = OrderedDict([
-            ("input", None),
-            ("mcorr", None),
-        ])
-
-        self.current_graphics: OrderedDict[str, Image] = OrderedDict([
-            ("input", None),
-            ("mcorr", None),
-            ("dsavg", None),
-        ])
-
+        self._imaging_data: _MCorrContainer = None
+        self._graphics: _MCorrContainer = None
         self.ds_window = 10
 
         # Nothing works without this call
@@ -93,32 +129,57 @@ class BatchViewer:
         ix = self.get_selected_index()
         r = self.dataframe.iloc[ix]
 
-        self.current_movies["input"] = r.caiman.get_input_movie()
-        self.current_movies["mcorr"] = r.mcorr.get_output()
+        self._imaging_data = _MCorrContainer(
+            input=r.caiman.get_input_movie(),
+            mcorr=r.mcorr.get_output(),
+            dsavg=None,
+            mean=r.caiman.get_projection("mean"),
+            corr=r.caiman.get_correlation_image(),
+            shifts=None
+        )
 
-        self.current_graphics["input"] = Image(
-            self.current_movies["input"][0],
+        input_graphic = Image(
+            self._imaging_data.input[0],
             cmap="gnuplot2"
         )
 
-        self.frame_slider.max = self.current_movies["input"].shape[0] - 1
+        self.frame_slider.max = self._imaging_data.input.shape[0] - 1
 
-        self.current_graphics["mcorr"] = Image(
-            self.current_movies["mcorr"][0],
+        mcorr_graphic = Image(
+            self._imaging_data.mcorr[0],
             cmap="gnuplot2"
         )
 
         dsavg = self._get_dsavg(frame_index=0)
+        self._imaging_data.dsavg = dsavg
 
-        self.current_graphics["dsavg"] = Image(
+        dsavg_graphic = Image(
             dsavg,
             cmap="gnuplot2"
         )
 
-        for subplot, graphic in zip(self.grid_plot, self.current_graphics.values()):
-            subplot.add_graphic(graphic)
+        mean_graphic = Image(
+            self._imaging_data.mean,
+            cmap="gray"
+        )
 
-        # make graphics, remove any existing from the scene
+        corr_graphic = Image(
+            self._imaging_data.corr,
+            cmap="gray"
+        )
+
+        self._graphics = _MCorrContainer(
+            input=input_graphic,
+            mcorr=mcorr_graphic,
+            dsavg=dsavg_graphic,
+            mean=mean_graphic,
+            corr=corr_graphic,
+            shifts=None
+        )
+
+        for attr in ["input", "mcorr", "dsavg", "mean", "corr"]:
+            subplot: Subplot = getattr(self.subplots, attr)
+            subplot.add_graphic(getattr(self._graphics, attr))
 
         u = str(r["uuid"])
 
@@ -127,15 +188,18 @@ class BatchViewer:
         self.params_text_widget.value = format_key(r["params"], 0)
         self.outputs_text_widget.value = format_key(r["outputs"], 0)
 
+        # this does work for some reason if not called from the nb itself ¯\_(ツ)_/¯
+        self.reset_grid_plot_scenes()
+
     def _get_dsavg(self, frame_index: int) -> np.ndarray:
         if self.ds_window % 2 == 1:  # make sure it's even
             self.ds_window += 1
 
         start = max(0, (frame_index - int(self.ds_window / 2)))
-        end = min(self.current_movies["mcorr"].shape[0], (frame_index + int(self.ds_window / 2)))
+        end = min(self._imaging_data.mcorr.shape[0], (frame_index + int(self.ds_window / 2)))
 
         return np.nanmean(
-            self.current_movies["mcorr"][start:end], axis=0
+            self._imaging_data.mcorr[start:end], axis=0
         )
 
     def update_frame(self, *args):
@@ -144,25 +208,32 @@ class BatchViewer:
 
         ix = self.frame_slider.value
 
-        self.current_graphics["input"].update_data(self.current_movies["input"][ix])
-        self.current_graphics["mcorr"].update_data(self.current_movies["mcorr"][ix])
-        self.current_graphics["dsavg"].update_data(self._get_dsavg(frame_index=ix))
+        for attr in ["input", "mcorr"]:
+            graphic: Image = getattr(self._graphics, attr)
+            graphic.update_data(getattr(self._imaging_data, attr)[ix])
+
+        self._imaging_data.dsavg = self._get_dsavg(frame_index=ix)
+        self._graphics.dsavg.update_data(
+            self._imaging_data.dsavg
+        )
 
     def get_layout(self):
-        batch_widgets = VBox([self.batch_list_widget_label, self.batch_list_widget])
+        uuid_params_output = VBox([self.uuid_text_widget, self.params_text_widget, self.outputs_text_widget])
 
-        uuid_params_output = VBox([self.uuid_text_widget, self.params_text_widget, self.accordion])
-
-        info_widgets = HBox([batch_widgets, uuid_params_output])
+        info_widgets = HBox([self.batch_list_widget, uuid_params_output])
 
         return VBox([
             info_widgets,
             self.frame_slider,
-            self.grid_plot.show()
+            self.grid_plot.show(),
+            self.button_reset_view
         ])
 
     def show(self):
         return self.get_layout()
+
+    def reset_grid_plot_scenes(self, *args):
+        self.grid_plot.subplots[0, 0].center_scene()
 
     def _generate_grid_plot(self):
         pass

@@ -1,1 +1,1 @@
-from .widgets import BatchViewer
+from .widgets import MCorrViewer
