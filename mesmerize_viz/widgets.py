@@ -45,6 +45,37 @@ class _MCorrContainer:
         self.shifts = shifts
 
 
+class _BaseViewer:
+    def __int__(self, dataframe: pd.DataFrame, multi_select: bool = False):
+        self.dataframe: pd.DataFrame = dataframe,
+        self.grid_shape: Tuple[int, int] = None
+
+    def _init_batch_list_widget(self):
+        pass
+
+    def _set_frame_slider_width(self):
+        pass
+
+    def get_selected_index(self) -> Union[int, Tuple[int]]:
+        pass
+
+    def item_selection_changed(self):
+        pass
+
+    def update_frame(self, *args):
+        pass
+
+    def get_layout(self):
+        pass
+
+    def show(self):
+        pass
+
+    def reset_grid_plot_scenes(self, *args):
+        pass
+
+
+
 class MCorrViewer:
     def __init__(
             self,
@@ -53,7 +84,6 @@ class MCorrViewer:
     ):
         # in case the user did something weird with indexing
         self.dataframe: pd.DataFrame = dataframe.reset_index(drop=True)
-        self.grid_shape: Tuple[int, int] = None
 
         options = list()
         for ix, r in self.dataframe.iterrows():
