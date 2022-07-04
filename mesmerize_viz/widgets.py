@@ -160,7 +160,7 @@ class MCorrViewer:
         r = self.dataframe.iloc[ix]
 
         self._imaging_data = _MCorrContainer(
-            input=r.caiman.get_input_movie(),
+            input=r.caiman.get_input_movie("append-tiff"),
             mcorr=r.mcorr.get_output(),
             dsavg=None,
             mean=r.caiman.get_projection("mean"),
@@ -173,7 +173,7 @@ class MCorrViewer:
             cmap="gnuplot2"
         )
 
-        self.frame_slider.max = self._imaging_data.input.shape[0] - 1
+        self.frame_slider.max = self._imaging_data.mcorr.shape[0] - 1
 
         mcorr_graphic = Image(
             self._imaging_data.mcorr[0],
