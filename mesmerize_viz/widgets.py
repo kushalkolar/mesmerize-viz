@@ -46,45 +46,40 @@ class _MCorrContainer:
 
 
 class _BaseViewer:
-    def __int__(self, dataframe: pd.DataFrame, multi_select: bool = False):
-        self.dataframe: pd.DataFrame = dataframe,
-        self.grid_shape: Tuple[int, int] = None
-
-    def _init_batch_list_widget(self):
-        pass
-
-    def _set_frame_slider_width(self):
-        pass
-
-    def get_selected_index(self) -> Union[int, Tuple[int]]:
-        pass
-
-    def item_selection_changed(self):
-        pass
-
-    def update_frame(self, *args):
-        pass
-
-    def get_layout(self):
-        pass
-
-    def show(self):
-        pass
-
-    def reset_grid_plot_scenes(self, *args):
-        pass
-
-
-
-class MCorrViewer:
     def __init__(
             self,
             dataframe: pd.DataFrame,
+            grid_plot_shape: Tuple[int, int],
+            grid_plot_kwargs: Optional[dict] = None,
             multi_select: bool = False,
     ):
+        self.dataframe: pd.DataFrame = dataframe
+        self.grid_shape: Tuple[int, int] = None
+
         # in case the user did something weird with indexing
         self.dataframe: pd.DataFrame = dataframe.reset_index(drop=True)
 
+        self._init_batch_list_widget(multi_select)
+        self.batch_list_widget.layout = Layout(height="200px")
+
+        self.batch_list_widget.observe(self.item_selection_changed)
+
+        self.uuid_text_widget = widgets.Text(disabled=True, tooltip="UUID of item")
+        self.params_text_widget = widgets.Textarea(disabled=True, tooltip="Parameters of item")
+
+        self.outputs_text_widget = widgets.Textarea(disabled=True, tooltip="Output info of item")
+
+        self.grid_plot: GridPlot = GridPlot(shape=(2, 3), **grid_plot_kwargs)
+
+        self.frame_slider = widgets.IntSlider(value=0, min=0, description="frame index:")
+        self.grid_plot.renderer.add_event_handler(self._set_frame_slider_width, "resize")
+
+        self.frame_slider.observe(self.update_frame, "value")
+
+        self.button_reset_view = widgets.Button(description="Reset View")
+        self.button_reset_view.on_click(self.reset_grid_plot_scenes)
+
+    def _init_batch_list_widget(self, multi_select: bool):
         options = list()
         for ix, r in self.dataframe.iterrows():
             if r["outputs"] is None:
@@ -94,7 +89,7 @@ class MCorrViewer:
             elif r["outputs"]["success"] is False:
                 indicator = red_circle
             name = r["name"]
-            options.append(f"{indicator} {name}")
+            options.append(f"{ix}: {indicator} {name}")
 
         if multi_select:
             self.batch_list_widget: widgets.SelectMultiple = widgets.SelectMultiple(
@@ -107,15 +102,63 @@ class MCorrViewer:
                 index=0
             )
 
-        self.batch_list_widget.layout = Layout(height="200px")
-        self.batch_list_widget.observe(self.item_selection_changed)
+    def _set_frame_slider_width(self, *args):
+        w, h = self.grid_plot.renderer.logical_size
+        self.frame_slider.layout = Layout(width=f"{w}px")
 
-        self.uuid_text_widget = widgets.Text(disabled=True, tooltip="UUID of item")
-        self.params_text_widget = widgets.Textarea(disabled=True, tooltip="Parameters of item")
+    def get_selected_index(self) -> int:
+        return self.batch_list_widget.index
 
-        self.outputs_text_widget = widgets.Textarea(disabled=True, tooltip="Output info of item")
+    def get_selected_item(self) -> pd.Series:
+        if self.get_selected_index() is None:
+            return False
 
-        self.grid_plot: GridPlot = GridPlot(shape=(2, 3), controllers="sync")
+        ix = self.get_selected_index()
+        r = self.dataframe.iloc[ix]
+
+        if r["outputs"]["success"] is False:
+            self.outputs_text_widget.value = r["outputs"]["traceback"]
+            return False
+
+        return r
+
+    def item_selection_changed(self):
+        pass
+
+    def update_frame(self, *args):
+        pass
+
+    def get_layout(self):
+        uuid_params_output = VBox([self.uuid_text_widget, self.params_text_widget, self.outputs_text_widget])
+
+        info_widgets = HBox([self.batch_list_widget, uuid_params_output])
+
+        return VBox([
+            info_widgets,
+            self.button_reset_view,
+            self.frame_slider,
+            self.grid_plot.show(),
+        ])
+
+    def show(self):
+        return self.get_layout()
+
+    def reset_grid_plot_scenes(self, *args):
+        self.grid_plot.subplots[0, 0].center_scene()
+
+
+class MCorrViewer(_BaseViewer):
+    def __init__(
+            self,
+            dataframe: pd.DataFrame,
+    ):
+        super(MCorrViewer, self).__init__(
+            dataframe,
+            grid_plot_shape=(2, 3),
+            grid_plot_kwargs={"controllers": "sync"},
+            multi_select=False
+        )
+
         self.subplots = _MCorrContainer(
             input=self.grid_plot.subplots[0, 0],
             mcorr=self.grid_plot.subplots[0, 1],
@@ -142,31 +185,22 @@ class MCorrViewer:
         # I don't know why ¯\_(ツ)_/¯
         self.item_selection_changed()
 
-    def _set_frame_slider_width(self, *args):
-        w, h = self.grid_plot.renderer.logical_size
-        self.frame_slider.layout = Layout(width=f"{w}px")
-
-    def get_selected_index(self) -> int:
-        return self.batch_list_widget.index
-
     def item_selection_changed(self, *args):
-        if self.get_selected_index() is None:
+        r = self.get_selected_item()
+        if r is False:
             return
 
         for subplot in self.grid_plot:
             subplot.scene.clear()
 
-        ix = self.get_selected_index()
-        r = self.dataframe.iloc[ix]
-
         self._imaging_data = _MCorrContainer(
-            input=r.caiman.get_input_movie("append-tiff"),
-            mcorr=r.mcorr.get_output(),
-            dsavg=None,
-            mean=r.caiman.get_projection("mean"),
-            corr=r.caiman.get_correlation_image(),
-            shifts=None
-        )
+                input=r.caiman.get_input_movie("append-tiff"),
+                mcorr=r.mcorr.get_output(),
+                dsavg=None,
+                mean=r.caiman.get_projection("mean"),
+                corr=r.caiman.get_correlation_image(),
+                shifts=None
+            )
 
         input_graphic = Image(
             self._imaging_data.input[0],
@@ -246,24 +280,6 @@ class MCorrViewer:
         self._graphics.dsavg.update_data(
             self._imaging_data.dsavg
         )
-
-    def get_layout(self):
-        uuid_params_output = VBox([self.uuid_text_widget, self.params_text_widget, self.outputs_text_widget])
-
-        info_widgets = HBox([self.batch_list_widget, uuid_params_output])
-
-        return VBox([
-            info_widgets,
-            self.frame_slider,
-            self.grid_plot.show(),
-            self.button_reset_view
-        ])
-
-    def show(self):
-        return self.get_layout()
-
-    def reset_grid_plot_scenes(self, *args):
-        self.grid_plot.subplots[0, 0].center_scene()
 
     def _generate_grid_plot(self):
         pass
