@@ -69,12 +69,25 @@ class _BaseViewer:
 
         self.outputs_text_widget = widgets.Textarea(disabled=True, tooltip="Output info of item")
 
-        self.grid_plot: GridPlot = GridPlot(shape=(2, 3), **grid_plot_kwargs)
+        self.grid_plot: GridPlot = GridPlot(shape=grid_plot_shape, **grid_plot_kwargs)
 
         self.frame_slider = widgets.IntSlider(value=0, min=0, description="frame index:")
         self.grid_plot.renderer.add_event_handler(self._set_frame_slider_width, "resize")
 
         self.frame_slider.observe(self.update_frame, "value")
+
+        self.play_button = widgets.Play(
+            value=self.frame_slider.value,
+            min=self.frame_slider.min,
+            max=self.frame_slider.max,
+            step=1,
+            interval=100,
+        )
+
+        widgets.jslink(
+            (self.play_button, 'value'),
+            (self.frame_slider, 'value')
+        )
 
         self.button_reset_view = widgets.Button(description="Reset View")
         self.button_reset_view.on_click(self.reset_grid_plot_scenes)
@@ -106,6 +119,12 @@ class _BaseViewer:
         w, h = self.grid_plot.renderer.logical_size
         self.frame_slider.layout = Layout(width=f"{w}px")
 
+    def _set_frame_slider_minmax(self, minmax: Tuple[int, int]):
+        self.frame_slider.min = minmax[0]
+        self.frame_slider.max = minmax[1]
+        self.play_button.min = minmax[0]
+        self.play_button.max = minmax[1]
+
     def get_selected_index(self) -> int:
         return self.batch_list_widget.index
 
@@ -135,7 +154,7 @@ class _BaseViewer:
 
         return VBox([
             info_widgets,
-            self.button_reset_view,
+            HBox([self.button_reset_view, self.play_button]),
             self.frame_slider,
             self.grid_plot.show(),
         ])
@@ -168,14 +187,6 @@ class MCorrViewer(_BaseViewer):
             shifts=self.grid_plot.subplots[1, 2]
         )
 
-        self.frame_slider = widgets.IntSlider(value=0, min=0, description="frame index:")
-        self.grid_plot.renderer.add_event_handler(self._set_frame_slider_width, "resize")
-
-        self.frame_slider.observe(self.update_frame, "value")
-
-        self.button_reset_view = widgets.Button(description="Reset View")
-        self.button_reset_view.on_click(self.reset_grid_plot_scenes)
-
         # this should become dynamic later
         self._imaging_data: _MCorrContainer = None
         self._graphics: _MCorrContainer = None
@@ -207,7 +218,9 @@ class MCorrViewer(_BaseViewer):
             cmap="gnuplot2"
         )
 
-        self.frame_slider.max = self._imaging_data.mcorr.shape[0] - 1
+        self._set_frame_slider_minmax(
+            (0, self._imaging_data.mcorr.shape[0] - 1)
+        )
 
         mcorr_graphic = Image(
             self._imaging_data.mcorr[0],
