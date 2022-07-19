@@ -148,16 +148,22 @@ class _BaseViewer:
         pass
 
     def get_layout(self):
+        tab = widgets.Tab()
+        tab.set_title(0, 'Viewer')
+        tab.set_title(1, 'Selector')
+
         uuid_params_output = VBox([self.uuid_text_widget, self.params_text_widget, self.outputs_text_widget])
 
         info_widgets = HBox([self.batch_list_widget, uuid_params_output])
 
-        return VBox([
+        tab.children = (VBox([
             info_widgets,
             HBox([self.button_reset_view, self.play_button]),
             self.frame_slider,
             self.grid_plot.show(),
-        ])
+        ]), widgets.IntSlider())
+
+        return tab
 
     def show(self):
         return self.get_layout()
