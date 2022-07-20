@@ -9,6 +9,13 @@ import pims
 import time
 from .baseviewer import _BaseViewer
 
+# formats dict to yaml-ish-style
+is_pos = lambda x: 1 if x > 0 else 0
+format_key = lambda d, t: "\n" * is_pos(t) + \
+                          "\n".join(
+                              [": ".join(["\t" * t + k, format_key(v, t + 1)]) for k, v in d.items()]
+                          ) if isinstance(d, dict) else str(d)
+
 class _MCorrContainer:
     def __init__(
             self,
@@ -54,7 +61,7 @@ class MCorrViewer(_BaseViewer):
 
         # Nothing works without this call
         # I don't know why ¯\_(ツ)_/¯
-        #self.item_selection_changed()
+        self.item_selection_changed()
 
     def item_selection_changed(self, *args):
         r = self.get_selected_item()
@@ -65,7 +72,7 @@ class MCorrViewer(_BaseViewer):
             subplot.scene.clear()
 
         self._imaging_data = _MCorrContainer(
-                input=r.caiman.get_input_movie("append-tiff"),
+                input=r.caiman.get_input_movie(),
                 mcorr=r.mcorr.get_output(),
                 dsavg=None,
                 mean=r.caiman.get_projection("mean"),

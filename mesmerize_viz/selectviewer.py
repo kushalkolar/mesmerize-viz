@@ -11,7 +11,7 @@ import time
 class SelectViewer:
     def __init__(
             self,
-            grid_plot_shape: Tuple[int, int],
+            grid_plot_shape: Tuple[int, int] = None,
             multi_select: bool = False
     ):
         self.grid_shape: Tuple[int, int] = None
