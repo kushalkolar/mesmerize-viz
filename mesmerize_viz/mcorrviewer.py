@@ -7,7 +7,7 @@ from uuid import UUID
 from collections import OrderedDict
 import pims
 import time
-from .BaseViewer import _BaseViewer
+from .baseviewer import _BaseViewer
 
 class _MCorrContainer:
     def __init__(

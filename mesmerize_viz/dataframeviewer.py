@@ -12,7 +12,7 @@ class DataFrameViewer:
     def __init__(
             self,
             _BaseViewer,
-            SelectViewer
+            SelectViewer,
     ):
         self.base = _BaseViewer
         self.select = SelectViewer

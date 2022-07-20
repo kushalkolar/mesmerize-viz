@@ -9,8 +9,12 @@ import pims
 import time
 
 class SelectViewer:
-    def __init__(self):
-        self.name = "SelectViewer"
+    def __init__(
+            self,
+            grid_plot_shape: Tuple[int, int],
+            multi_select: bool = False
+    ):
+        self.grid_shape: Tuple[int, int] = None
 
     def get_layout(self):
         return widgets.IntSlider()

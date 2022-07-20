@@ -1,1 +1,1 @@
-from .MCorrViewer import MCorrViewer
+from .mcorrviewer import MCorrViewer
