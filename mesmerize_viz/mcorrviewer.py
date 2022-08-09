@@ -76,7 +76,7 @@ class MCorrViewer(_BaseViewer):
                 mcorr=r.mcorr.get_output(),
                 dsavg=None,
                 mean=r.caiman.get_projection("mean"),
-                corr=r.caiman.get_correlation_image(),
+                corr=r.caiman.get_corr_image(),
                 shifts=None
             )
 
