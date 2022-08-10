@@ -8,6 +8,7 @@ from collections import OrderedDict
 import pims
 import time
 
+
 class SelectViewer:
     def __init__(
             self,
@@ -17,19 +18,20 @@ class SelectViewer:
     ):
         self.grid_shape = grid_plot_shape
         self.table = GridspecLayout(self.grid_shape[0], self.grid_shape[1])
+        self.algo = algo
 
     def update_alg(self, algo: str):
-        if algo == "mcorr":
-            for i in range(self.grid_shape[0]):
-                for j in range(self.grid_shape[1]):
-                    self.table[i,j] = Dropdown(
-            options=['raw movie', 'mcorr movie', 'downsampled avg movie', 'correlation image', 'shifts'])
-        elif algo == "cnmf":
+        self.algo = algo
+        if self.algo == "mcorr":
             for i in range(self.grid_shape[0]):
                 for j in range(self.grid_shape[1]):
                     self.table[i, j] = Dropdown(
-            options=['input movie', 'contours', 'reconstructed movie', 'residuals', 'heatmap', 'traces'])
-
+                        options=['raw movie', 'mcorr movie', 'downsampled avg movie', 'correlation image', 'shifts'])
+        elif self.algo == "cnmf":
+            for i in range(self.grid_shape[0]):
+                for j in range(self.grid_shape[1]):
+                    self.table[i, j] = Dropdown(
+                        options=['input movie', 'contours', 'reconstructed', 'residuals', 'temporal', 'background'])
 
     def get_layout(self):
         self.update_alg("cnmf")
