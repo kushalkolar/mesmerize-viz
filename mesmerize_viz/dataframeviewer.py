@@ -23,6 +23,9 @@ class DataFrameViewer:
 
         self.tab.children = (self.base.get_layout(), self.select.get_layout())
 
+    # selecting an option from the dropdown mention should signal change in baseviewer
+
+
     def show(self):
         return self.tab
 

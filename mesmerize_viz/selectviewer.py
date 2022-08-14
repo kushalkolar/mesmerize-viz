@@ -20,7 +20,7 @@ class SelectViewer:
         self.table = GridspecLayout(self.grid_shape[0], self.grid_shape[1])
         self.algo = algo
 
-    def update_alg(self, algo: str):
+    def set_algo(self, algo: str):
         self.algo = algo
         if self.algo == "mcorr":
             for i in range(self.grid_shape[0]):
@@ -34,5 +34,5 @@ class SelectViewer:
                         options=['input movie', 'contours', 'reconstructed', 'residuals', 'temporal', 'background'])
 
     def get_layout(self):
-        self.update_alg("cnmf")
+        self.set_algo("cnmf")
         return self.table
