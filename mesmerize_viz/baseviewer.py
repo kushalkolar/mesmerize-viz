@@ -83,7 +83,10 @@ class _BaseViewer:
                 indicator = green_circle
             elif r["outputs"]["success"] is False:
                 indicator = red_circle
-            name = r["name"]
+            try:
+                name = r["name"]
+            except:
+                name = r["item_name"]
             options.append(f"{ix}: {indicator} {name}")
 
         if multi_select:
