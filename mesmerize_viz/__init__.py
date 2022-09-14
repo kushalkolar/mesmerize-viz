@@ -1,1 +1,1 @@
-from .widgets import MCorrViewer
+from .mcorrviewer import MCorrViewer
