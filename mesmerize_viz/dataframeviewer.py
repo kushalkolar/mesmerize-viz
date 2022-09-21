@@ -17,4 +17,7 @@ class DataframeViewer:
         self.tab.children = (self.base.get_layout(), self.select.get_layout())
 
     def show(self):
-        return self.tab
+        if self.base.algo == "mcorr":
+            return self.base.get_layout()
+        else:
+            return self.tab

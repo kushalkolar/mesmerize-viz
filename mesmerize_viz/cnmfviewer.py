@@ -53,23 +53,24 @@ class CNMFViewer(_BaseViewer):
     ):
         super(CNMFViewer, self).__init__(
             dataframe,
-            grid_plot_shape=(2, 3),
+            grid_plot_shape=(2, 2),
             grid_plot_kwargs={"controllers": "sync"},
             multi_select=False
         )
 
         self.subplots = _CNMFContainer(
             input=self.grid_plot.subplots[0, 0],
-            contours=self.grid_plot.subplots[0, 1],
-            reconstructed=self.grid_plot.subplots[0, 2],
+            contours=self.grid_plot.subplots[0, 0],
+            reconstructed=self.grid_plot.subplots[0, 1],
             residuals=self.grid_plot.subplots[1, 0],
             #temporal=self.grid_plot.subplots[1, 1],
-            background=self.grid_plot.subplots[1, 2]
+            background=self.grid_plot.subplots[1, 1]
         )
 
         self._imaging_data: _CNMFContainer = None
         self._graphics: _CNMFContainer = None
         self.ds_window = 10
+        self.algo = "cnmf"
 
         self.item_selection_changed()
 
@@ -116,12 +117,14 @@ class CNMFViewer(_BaseViewer):
 
         reconstructed_graphic = Image(
             self._imaging_data.reconstructed[0],
-            cmap="gnuplot2"
+            cmap="gnuplot2",
+            vmin=3,
+            vmax=30
         )
 
         background_graphic = Image(
             self._imaging_data.background[0],
-            cmap="gray"
+            cmap="gray",
         )
 
         self._graphics = _CNMFContainer(

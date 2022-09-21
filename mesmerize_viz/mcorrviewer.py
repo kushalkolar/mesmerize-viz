@@ -71,6 +71,7 @@ class MCorrViewer(_BaseViewer):
         self._imaging_data: _MCorrContainer = None
         self._graphics: _MCorrContainer = None
         self.ds_window = 10
+        self.algo = "mcorr"
 
         # Nothing works without this call
         # I don't know why ¯\_(ツ)_/¯
