@@ -3,7 +3,7 @@ Notebook widgets built using [`fastplotlib`](https://github.com/kushalkolar/fast
 
 This requires [`mesmerize-core`](https://github.com/nel-lab/mesmerize-core) and [`fastplotlib`](https://github.com/kushalkolar/fastplotlib) to be installed.
 
-This is a WIP, currently includes experimental widget for inspecting motion correction results (see video).\
+**This is a WIP and in the pre-alpha stage, currently includes experimental widget for inspecting motion correction results (see video).**\
 This widget displays:
 
 |Raw | MCor | Downsampled Mean |
