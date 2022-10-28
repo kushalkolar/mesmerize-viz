@@ -74,6 +74,17 @@ class CNMFViewer(_BaseViewer):
 
         self.item_selection_changed()
 
+        # self.positions = list()
+        # self.positions.append((0,0))
+        # self.positions.append((0,1))
+        # self.positions.append((1,0))
+        # self.positions.append((1,1))
+        #
+        # self.grid_plot[0,0].name = "input"
+        # self.grid_plot[0,1].name = "reconstructed"
+        # self.grid_plot[1,0].name = "residuals"
+        # self.grid_plot[1,1].name = "background"
+
     def item_selection_changed(self, *args):
         r = self.get_selected_item()
         if r is False:
@@ -81,23 +92,22 @@ class CNMFViewer(_BaseViewer):
 
         for subplot in self.grid_plot:
             subplot.scene.clear()
-
+        
         self._imaging_data = _CNMFContainer(
             input=r.caiman.get_input_movie(),
-            contours=r.cnmf.get_contours()[0],
-            residuals=r.cnmf.get_residuals(),
-            reconstructed=r.cnmf.get_rcm(),
+            contours=r.cnmf.get_contours("good", swap_dim=False)[0],
+            residuals=r.cnmf.get_residuals(frame_indices=0)[0],
+            reconstructed=r.cnmf.get_rcm(component_indices="good", frame_indices=0)[0],
             #temporal=r.cnmf.get_temporal(),
-            background=r.cnmf.get_rcb()
+            background=r.cnmf.get_rcb(frame_indices=0)[0]
         )
-
         input_graphic = Image(
             self._imaging_data.input[0],
             cmap="gnuplot2"
         )
 
         self._set_frame_slider_minmax(
-            (0, self._imaging_data.reconstructed.shape[0]-1)
+            (0, self._imaging_data.input.shape[0] - 1)
         )
 
         contours_graphic: List[Line] = list()
@@ -111,19 +121,19 @@ class CNMFViewer(_BaseViewer):
             contours_graphic.append(Line(data=coors_3d, colors=colors))
 
         residuals_graphic = Image(
-            self._imaging_data.residuals[0],
+            self._imaging_data.residuals,
             cmap="gnuplot2"
         )
 
         reconstructed_graphic = Image(
-            self._imaging_data.reconstructed[0],
+            self._imaging_data.reconstructed,
             cmap="gnuplot2",
             vmin=3,
             vmax=30
         )
 
         background_graphic = Image(
-            self._imaging_data.background[0],
+            self._imaging_data.background,
             cmap="gray",
         )
 
@@ -153,15 +163,61 @@ class CNMFViewer(_BaseViewer):
         # this does work for some reason if not called from the nb itself ¯\_(ツ)_/¯
         self.reset_grid_plot_scenes()
 
+    def update_graphic(self, position: Tuple[int, int], change: str):
+        self.grid_plot.subplots[position[0], position[1]].scene.clear()
+        new_graphic = self.create_graphic(change)
+        self.grid_plot.subplots[position[0], position[1]].add_graphic(new_graphic)
+        self.grid_plot[position[0], position[1]].name = change
+        self.grid_plot.show()
+
+    def create_graphic(self, graphic_type):
+        if graphic_type == "input":
+            return Image(
+                self._imaging_data.input[0],
+                cmap="gnuplot2"
+            )
+        elif graphic_type == "residuals":
+            return Image(
+                self._imaging_data.residuals[0],
+                cmap="gnuplot2"
+            )
+        elif graphic_type == "background":
+            return Image(
+                self._imaging_data.background[0],
+                cmap="gray",
+            )
+        else:
+            return Image(
+                self._imaging_data.reconstructed[0],
+                cmap="gnuplot2",
+                vmin=3,
+                vmax=30
+            )
+
     def update_frame(self, *args):
         if self.get_selected_index() is None:
+            return
+        
+        r = self.get_selected_item()
+        if r is False:
             return
 
         ix = self.frame_slider.value
 
-        for attr in ["input", "residuals", "reconstructed", "background"]:
-            graphic: Image = getattr(self._graphics, attr)
-            graphic.update_data(getattr(self._imaging_data, attr)[ix])
+        # for each position in the grid plot, update based on what is stored there
+
+        # for position in self.positions:
+        #     graphic: Image = getattr(self._graphics, self.grid_plot[position].name)
+        #     graphic.update_data(getattr(self._imaging_data, self.grid_plot[position].name)[ix])
+
+        # for attr in ["input", "residuals", "reconstructed", "background"]:
+        #     graphic: Image = getattr(self._graphics, attr)
+        #     graphic.update_data(getattr(self._imaging_data, attr)[ix])
+            
+        self._graphics.input.update_data(self._imaging_data.input[ix])
+        self._graphics.reconstructed.update_data(r.cnmf.get_rcm(component_indices="good", frame_indices=ix)[0])
+        self._graphics.residuals.update_data(r.cnmf.get_residuals(frame_indices=ix)[0])
+        self._graphics.background.update_data(r.cnmf.get_rcb(frame_indices=ix)[0])
 
     def _generate_grid_plot(self):
         pass

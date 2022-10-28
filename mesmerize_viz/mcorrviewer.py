@@ -149,15 +149,6 @@ class MCorrViewer(_BaseViewer):
         # this does work for some reason if not called from the nb itself ¯\_(ツ)_/¯
         self.reset_grid_plot_scenes()
 
-    def update_graphic(self, position: Tuple[int, int], change: str):
-        self.grid_plot.subplots[position[0], position[1]].remove_graphic()
-        # new_graphic = create_graphic(change)
-        # self.grid_plot.subplots[position[0], position[1]].add_graphic(new_graphic)
-
-    def create_graphic(self, graphic_type):
-        pass
-        # create a new graphic to add to subplot
-
     def _get_dsavg(self, frame_index: int) -> np.ndarray:
         if self.ds_window % 2 == 1:  # make sure it's even
             self.ds_window += 1
