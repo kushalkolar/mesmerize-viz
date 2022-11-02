@@ -1,6 +1,6 @@
 import numpy as np
 from ipywidgets import widgets, VBox, HBox, Layout
-from fastplotlib import GridPlot, Image, Subplot, Line
+from fastplotlib import GridPlot, Image, Subplot, Line, Heatmap
 from typing import *
 import pandas as pd
 from uuid import UUID
@@ -36,7 +36,8 @@ class _CNMFContainer:
             reconstructed: Union[Subplot, np.ndarray, Image],
             residuals: Union[Subplot, np.ndarray, Image],
             #temporal: Union[Subplot, np.ndarray, Image],
-            background: Union[Subplot, np.ndarray, Image]
+            background: Union[Subplot, np.ndarray, Image],
+            heatmap: Union[Subplot, np.ndarray, Image]
     ):
         self.input = input
         self.contours = contours
@@ -44,6 +45,7 @@ class _CNMFContainer:
         self.residuals = residuals
         #self.temporal = temporal
         self.background = background
+        self.heatmap = heatmap
 
 
 class CNMFViewer(_BaseViewer):
@@ -53,18 +55,23 @@ class CNMFViewer(_BaseViewer):
     ):
         super(CNMFViewer, self).__init__(
             dataframe,
-            grid_plot_shape=(2, 2),
-            grid_plot_kwargs={"controllers": "sync"},
+            grid_plot_shape=(2, 3),
+            grid_plot_kwargs={"controllers": np.array([
+                [1, 0, 1],
+                [1, 1, 1]
+            ])},
             multi_select=False
         )
 
         self.subplots = _CNMFContainer(
             input=self.grid_plot.subplots[0, 0],
             contours=self.grid_plot.subplots[0, 0],
-            reconstructed=self.grid_plot.subplots[0, 1],
+            reconstructed=self.grid_plot.subplots[0, 2],
             residuals=self.grid_plot.subplots[1, 0],
             #temporal=self.grid_plot.subplots[1, 1],
-            background=self.grid_plot.subplots[1, 1]
+            background=self.grid_plot.subplots[1, 1],
+            heatmap=self.grid_plot.subplots[0, 1]
+
         )
 
         self._imaging_data: _CNMFContainer = None
@@ -99,8 +106,10 @@ class CNMFViewer(_BaseViewer):
             residuals=r.cnmf.get_residuals(frame_indices=0)[0],
             reconstructed=r.cnmf.get_rcm(component_indices="good", frame_indices=0)[0],
             #temporal=r.cnmf.get_temporal(),
-            background=r.cnmf.get_rcb(frame_indices=0)[0]
+            background=r.cnmf.get_rcb(frame_indices=0)[0],
+            heatmap=r.cnmf.get_temporal(component_indices="good")[:,0:1000]
         )
+
         input_graphic = Image(
             self._imaging_data.input[0],
             cmap="gnuplot2"
@@ -137,16 +146,24 @@ class CNMFViewer(_BaseViewer):
             cmap="gray",
         )
 
+        heatmap_graphic = Heatmap(
+            self._imaging_data.heatmap,
+            cmap="jet"
+        )
+
         self._graphics = _CNMFContainer(
             input=input_graphic,
             contours=contours_graphic,
             residuals=residuals_graphic,
             reconstructed=reconstructed_graphic,
             # temporal,
-            background=background_graphic
+            background=background_graphic,
+            heatmap=heatmap_graphic
         )
 
-        for attr in ["input", "residuals", "reconstructed", "background"]:
+        self.grid_plot.subplots[0,1].controller.maintain_aspect = False
+
+        for attr in ["input", "residuals", "reconstructed", "background", "heatmap"]:
             subplot: Subplot = getattr(self.subplots, attr)
             subplot.add_graphic(getattr(self._graphics, attr))
 
@@ -159,6 +176,10 @@ class CNMFViewer(_BaseViewer):
 
         self.params_text_widget.value = format_key(r["params"], 0)
         self.outputs_text_widget.value = format_key(r["outputs"], 0)
+
+        # prevents non-heatmap subplots from being able to use stretch feature
+        # because other grid_plots are synced by controller, changing 1 changes all
+        self.grid_plot.subplots[0, 0].controller.maintain_aspect = True
 
         # this does work for some reason if not called from the nb itself ¯\_(ツ)_/¯
         self.reset_grid_plot_scenes()
