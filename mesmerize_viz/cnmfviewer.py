@@ -1,4 +1,5 @@
 import numpy as np
+import pygfx
 from ipywidgets import widgets, VBox, HBox, Layout
 from fastplotlib import GridPlot, Image, Subplot, Line, Heatmap
 from typing import *
@@ -17,15 +18,13 @@ format_key = lambda d, t: "\n" * is_pos(t) + \
                               [": ".join(["\t" * t + k, format_key(v, t + 1)]) for k, v in d.items()]
                           ) if isinstance(d, dict) else str(d)
 
-
 input_readers = [
     "pims",
 ]
 
-
-blue_circle = chr(int("0x1f535",base=16))
-green_circle = chr(int("0x1f7e2",base=16))
-red_circle = chr(int("0x1f534",base=16))
+blue_circle = chr(int("0x1f535", base=16))
+green_circle = chr(int("0x1f7e2", base=16))
+red_circle = chr(int("0x1f534", base=16))
 
 
 class _CNMFContainer:
@@ -35,7 +34,7 @@ class _CNMFContainer:
             contours: Union[Subplot, np.ndarray, Image],
             reconstructed: Union[Subplot, np.ndarray, Image],
             residuals: Union[Subplot, np.ndarray, Image],
-            #temporal: Union[Subplot, np.ndarray, Image],
+            # temporal: Union[Subplot, np.ndarray, Image],
             background: Union[Subplot, np.ndarray, Image],
             heatmap: Union[Subplot, np.ndarray, Image]
     ):
@@ -43,9 +42,56 @@ class _CNMFContainer:
         self.contours = contours
         self.reconstructed = reconstructed
         self.residuals = residuals
-        #self.temporal = temporal
+        # self.temporal = temporal
         self.background = background
         self.heatmap = heatmap
+
+
+class ContourSelection():
+    def __init__(
+            self,
+            gp: GridPlot,
+            coms,
+    ):
+        self.gp = gp
+        self.heatmap = self.gp.subplots[0, 1].scene.children[0]
+        self.image = None
+        self._contour_index = None
+
+        for child in self.gp.subplots[0, 0].scene.children:
+            if isinstance(child, pygfx.Image):
+                self.image = child
+                break;
+        if self.image is None:
+            raise ValueError("No image found!")
+        self.coms = np.array(coms)
+
+        self.image.add_event_handler(self.event_handler, "click")
+
+    # first need to add event handler for when contour is clicked on
+    # should also trigger highlighting in heatmap
+    def event_handler(self, event):
+        if self._contour_index is not None:
+            self.remove_highlight()
+            self.add_highlight(event)
+        else:
+            self.add_highlight(event)
+
+    def add_highlight(self, event):
+        click_location = np.array(event.pick_info["index"])
+        self._contour_index = np.linalg.norm((self.coms - click_location), axis=1).argsort()[0] + 1
+        line = self.gp.subplots[0, 0].scene.children[self._contour_index]
+        line.geometry.colors.data[:] = np.array([1.0, 1.0, 1.0, 1.0])
+        line.geometry.colors.update_range()
+        # self.heatmap.add_highlight(self._contour_index)
+
+    def remove_highlight(self):
+        # change color of highlighted index back to normal
+        line = self.gp.subplots[0, 0].scene.children[self._contour_index]
+        line.geometry.colors.data[:] = np.array([1., 0., 0., 0.7])
+        line.geometry.colors.update_range()
+        # for h in self.heatmap._highlights:
+        #     self.heatmap.remove_highlight(h)
 
 
 class CNMFViewer(_BaseViewer):
@@ -68,10 +114,9 @@ class CNMFViewer(_BaseViewer):
             contours=self.grid_plot.subplots[0, 0],
             reconstructed=self.grid_plot.subplots[0, 2],
             residuals=self.grid_plot.subplots[1, 0],
-            #temporal=self.grid_plot.subplots[1, 1],
+            # temporal=self.grid_plot.subplots[1, 1],
             background=self.grid_plot.subplots[1, 1],
             heatmap=self.grid_plot.subplots[0, 1]
-
         )
 
         self._imaging_data: _CNMFContainer = None
@@ -99,15 +144,15 @@ class CNMFViewer(_BaseViewer):
 
         for subplot in self.grid_plot:
             subplot.scene.clear()
-        
+
         self._imaging_data = _CNMFContainer(
             input=r.caiman.get_input_movie(),
             contours=r.cnmf.get_contours("good", swap_dim=False)[0],
             residuals=r.cnmf.get_residuals(frame_indices=0)[0],
             reconstructed=r.cnmf.get_rcm(component_indices="good", frame_indices=0)[0],
-            #temporal=r.cnmf.get_temporal(),
+            # temporal=r.cnmf.get_temporal(),
             background=r.cnmf.get_rcb(frame_indices=0)[0],
-            heatmap=r.cnmf.get_temporal(component_indices="good")[:,0:1000]
+            heatmap=r.cnmf.get_temporal(component_indices="good")[:, 0:1000]
         )
 
         input_graphic = Image(
@@ -123,9 +168,9 @@ class CNMFViewer(_BaseViewer):
 
         for coor in self._imaging_data.contours:
             zs = np.ones(coor.shape[0])
-            coors_3d = np.dstack([coor[:,0], coor[:,1], zs])[0].astype(np.float32)
+            coors_3d = np.dstack([coor[:, 0], coor[:, 1], zs])[0].astype(np.float32)
 
-            colors = np.vstack([[1.,0.,0.,1.]]*coors_3d.shape[0]).astype(np.float32)
+            colors = np.vstack([[1., 0., 0., 1.]] * coors_3d.shape[0]).astype(np.float32)
 
             contours_graphic.append(Line(data=coors_3d, colors=colors))
 
@@ -161,7 +206,7 @@ class CNMFViewer(_BaseViewer):
             heatmap=heatmap_graphic
         )
 
-        self.grid_plot.subplots[0,1].controller.maintain_aspect = False
+        self.grid_plot.subplots[0, 1].controller.maintain_aspect = False
 
         for attr in ["input", "residuals", "reconstructed", "background", "heatmap"]:
             subplot: Subplot = getattr(self.subplots, attr)
@@ -169,6 +214,9 @@ class CNMFViewer(_BaseViewer):
 
         for line in contours_graphic:
             self.subplots.input.add_graphic(line)
+
+        coms = r.cnmf.get_contours("good", swap_dim=False)[1]
+        contour_selection = ContourSelection(gp=self.grid_plot, coms=coms)
 
         u = str(r["uuid"])
 
@@ -218,7 +266,7 @@ class CNMFViewer(_BaseViewer):
     def update_frame(self, *args):
         if self.get_selected_index() is None:
             return
-        
+
         r = self.get_selected_item()
         if r is False:
             return
@@ -234,7 +282,7 @@ class CNMFViewer(_BaseViewer):
         # for attr in ["input", "residuals", "reconstructed", "background"]:
         #     graphic: Image = getattr(self._graphics, attr)
         #     graphic.update_data(getattr(self._imaging_data, attr)[ix])
-            
+
         self._graphics.input.update_data(self._imaging_data.input[ix])
         self._graphics.reconstructed.update_data(r.cnmf.get_rcm(component_indices="good", frame_indices=ix)[0])
         self._graphics.residuals.update_data(r.cnmf.get_residuals(frame_indices=ix)[0])
@@ -242,4 +290,3 @@ class CNMFViewer(_BaseViewer):
 
     def _generate_grid_plot(self):
         pass
-
