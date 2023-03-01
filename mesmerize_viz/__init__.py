@@ -1,1 +1,1 @@
-from .mcorrviewer import MCorrViewer
+from ._mcorr import MCorrExtensionsViz
