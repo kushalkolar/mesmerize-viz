@@ -44,9 +44,9 @@ class ZeroArray(LazyArray):
     For example this allows having mean, max etc. projections in the same ImageWidget as the
     input or mcorr movie. It also allows having LineStacks or Heatmap in the same ImageWidget.
     """
-    def __init__(self, ndim, n_frames):
+    def __init__(self, ndim):
         self._shape = [1] * ndim
-        self._shape[0] = n_frames
+        self._shape[0] = np.inf
         self.rval = np.zeros(shape=self.shape, dtype=np.int8)
 
     @property
@@ -70,4 +70,4 @@ class ZeroArray(LazyArray):
         return 0.0
 
     def _compute_at_indices(self, indices: Union[int, slice]) -> np.ndarray:
-        return np.zeros(shape=(1, 1, 1), dtype=np.int8)
+        return self.rval

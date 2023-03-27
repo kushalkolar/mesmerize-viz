@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from typing import *
 from functools import partial
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -8,8 +9,11 @@ from mesmerize_core import MCorrExtensions
 from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
 
-from ._utils import validate_data_options, ZeroArray
+from ipydatagrid import DataGrid
+from ipywidgets import Textarea
 
+from ._utils import validate_data_options, ZeroArray
+from ._common import ImageWidgetWrapper
 
 projs = [
     "mean",
@@ -17,9 +21,130 @@ projs = [
     "std",
 ]
 
-
 # these are directly manged by the image widget since they are [t, x, y]
 standard_mappings = ["input", "mcorr"]
+
+
+def get_mcorr_data_mapping(series: pd.Series) -> dict:
+    projections = {k: partial(series.caiman.get_projection, k) for k in projs}
+    m = {
+        "input": series.caiman.get_input_movie,
+        "mcorr": series.mcorr.get_output,
+        "corr": series.caiman.get_corr_image,
+        **projections
+    }
+    return m
+
+
+class DataFrameViz:
+    def __init__(
+            self,
+            dataframe: pd.DataFrame,
+            data: List[str],
+            start_index: int = 0,
+            input_movie_kwargs=None,
+            image_widget_kwargs=None,
+            data_grid_kwargs: dict = None,
+    ):
+        self.dataframe = dataframe
+
+        if data_grid_kwargs is None:
+            data_grid_kwargs = dict()
+
+        self.grid = DataGrid(
+            self.dataframe,
+            selection_mode="row",
+            layout={"height": "200px"},
+            **data_grid_kwargs
+        )
+        self.params_text_area = Textarea(description="params:")
+        # data options this can't be changed once an image widget has been made
+        self._data = data
+
+        if input_movie_kwargs is None:
+            input_movie_kwargs = dict()
+
+        if image_widget_kwargs is None:
+            image_widget_kwargs = dict()
+
+        self.input_movie_kwargs = input_movie_kwargs
+        self.image_widget_kwargs = image_widget_kwargs
+
+        self.image_widget: ImageWidget = None
+        self._image_widget_wrapper: ImageWidgetWrapper = None
+        self.current_row: int = None
+
+        self.grid.observe(self._row_changed, names="selections")
+
+    def _make_image_widget(self, index):
+        self._image_widget_wrapper = ImageWidgetWrapper(
+            data=self._data,
+            data_mapping=get_mcorr_data_mapping(self.dataframe.iloc[index]),
+            standard_mappings=standard_mappings,
+            input_movie_kwargs=self.input_movie_kwargs,
+            image_widget_kwargs=self.image_widget_kwargs
+        )
+
+        self.image_widget = self._image_widget_wrapper.image_widget
+
+    def _get_selection_row(self) -> Union[int, None]:
+        r1 = self.grid.selections[0]["r1"]
+        r2 = self.grid.selections[0]["r2"]
+
+        if r1 != r2:
+            warn("Only single row selection is currently allowed")
+            return
+
+        return r1
+
+    def _row_changed(self, *args):
+        index = self._get_selection_row()
+        if index is None:
+            return
+
+        if self.image_widget is None:
+            self._make_image_widget(index)
+            return
+
+        self._image_widget_wrapper.change_data(
+            data=self._data,
+            data_mapping=get_mcorr_data_mapping(self.dataframe.iloc[index]),
+            input_movie_kwargs=self.input_movie_kwargs
+        )
+
+
+@pd.api.extensions.register_dataframe_accessor("mcorr")
+class MCorrDataFrameVizExtension:
+    def __init__(self, df):
+        self._df = df
+
+    @validate_algo("mcorr")
+    @validate_data_options()
+    def viz(
+            self,
+            data: List[str] = None,
+            input_movie_kwargs: dict = None,
+            image_widget_kwargs: dict = None,
+    ):
+        """
+        Visualize motion correction output.
+
+        Parameters
+        ----------
+        data: list of str, default ["input", "mcorr"]
+            list of data to plot, can also be a list of lists.
+
+        input_movie_kwargs: dict, optional
+            kwargs passed to get_input_movie()
+
+        image_widget_kwargs: dict, optional
+            kwargs passed to ImageWidget
+
+        Returns
+        -------
+        ImageWidget
+            fastplotlib.ImageWidget visualization
+        """
 
 
 @pd.api.extensions.register_series_accessor("mcorr")
@@ -78,7 +203,6 @@ class MCorrExtensionsViz(MCorrExtensions):
         if image_widget_kwargs is None:
             image_widget_kwargs = dict()
 
-        data_arrays = list()
         # data arrays directly passed to image widget
         data_arrays_iw = list()
 
