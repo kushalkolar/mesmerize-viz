@@ -2,6 +2,7 @@ from collections import OrderedDict
 from typing import *
 from functools import partial
 
+import numpy as np
 import pandas as pd
 from mesmerize_core import MCorrExtensions
 from mesmerize_core.caiman_extensions._utils import validate as validate_algo
@@ -74,6 +75,7 @@ class MCorrExtensionsViz(MCorrExtensions):
 
         # default kwargs unless user has specified
         default_iw_kwargs = {
+            "window_funcs": {"t": (np.mean, 11)},
             "vmin_vmax_sliders": True,
             "cmap": "gnuplot2"
         }
