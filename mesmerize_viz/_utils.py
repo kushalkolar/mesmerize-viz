@@ -46,8 +46,9 @@ class ZeroArray(LazyArray):
     """
     def __init__(self, ndim):
         self._shape = [1] * ndim
-        self._shape[0] = np.inf
         self.rval = np.zeros(shape=self.shape, dtype=np.int8)
+        # hack to allow it to work with any other array sizes
+        self._shape[0] = np.inf
 
     @property
     def dtype(self) -> str:
@@ -59,7 +60,7 @@ class ZeroArray(LazyArray):
 
     @property
     def n_frames(self) -> int:
-        return self.shape[0]
+        return np.inf
 
     @property
     def min(self) -> float:
