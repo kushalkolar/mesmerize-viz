@@ -10,7 +10,7 @@ from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea
+from ipywidgets import Textarea, VBox
 
 from ._utils import validate_data_options, ZeroArray
 from ._common import ImageWidgetWrapper
@@ -36,23 +36,62 @@ def get_mcorr_data_mapping(series: pd.Series) -> dict:
     return m
 
 
-class DataFrameViz:
-    def __init__(
+# to format params dict into yaml-like string
+is_pos = lambda x: 1 if x > 0 else 0
+# this doesn't work without the lambda, yes it is ugly
+format_params = lambda d, t: "\n" * is_pos(t) + \
+    "\n".join(
+        [": ".join(["   " * t + k, format_params(v, t + 1)]) for k, v in d.items()]
+    ) if isinstance(d, dict) else str(d)
+
+
+@pd.api.extensions.register_dataframe_accessor("mcorr")
+class MCorrDataFrameVizExtension:
+    def __init__(self, df):
+        self._dataframe = df
+
+    def viz(
             self,
-            dataframe: pd.DataFrame,
-            data: List[str],
+            data: List[str] = None,
             start_index: int = 0,
             input_movie_kwargs=None,
             image_widget_kwargs=None,
             data_grid_kwargs: dict = None,
     ):
-        self.dataframe = dataframe
+        """
+        Visualize motion correction output.
+
+        Parameters
+        ----------
+        data: list of str, default ["input", "mcorr"]
+            list of data to plot
+
+        start_index: int, default 0
+            start index item used to set the initial data in the ImageWidget
+
+        input_movie_kwargs: dict, optional
+            kwargs passed to get_input_movie()
+
+        image_widget_kwargs: dict, optional
+            kwargs passed to ImageWidget
+
+        data_grid_kwargs: dict, optional
+            kwargs passed to DataGrid()
+
+        Returns
+        -------
+        ImageWidget
+            fastplotlib.ImageWidget visualization
+        """
+        if data is None:
+            # default viz
+            data = ["input", "mcorr"]
 
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()
 
         self.grid = DataGrid(
-            self.dataframe,
+            self._dataframe,
             selection_mode="row",
             layout={"height": "200px"},
             **data_grid_kwargs
@@ -72,14 +111,26 @@ class DataFrameViz:
 
         self.image_widget: ImageWidget = None
         self._image_widget_wrapper: ImageWidgetWrapper = None
-        self.current_row: int = None
+        self.current_row: int = start_index
+        self._make_image_widget(index=start_index)
+        self.params_text_area.value = format_params(self._dataframe.iloc[start_index].params, 0)
 
         self.grid.observe(self._row_changed, names="selections")
+
+        self.widget = VBox(
+            [
+                self.grid,
+                self.params_text_area,
+                self.image_widget.show()
+            ]
+        )
+
+        return self.widget
 
     def _make_image_widget(self, index):
         self._image_widget_wrapper = ImageWidgetWrapper(
             data=self._data,
-            data_mapping=get_mcorr_data_mapping(self.dataframe.iloc[index]),
+            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
             standard_mappings=standard_mappings,
             input_movie_kwargs=self.input_movie_kwargs,
             image_widget_kwargs=self.image_widget_kwargs
@@ -102,50 +153,22 @@ class DataFrameViz:
         if index is None:
             return
 
+        if self.current_row == index:
+            return
+
         if self.image_widget is None:
             self._make_image_widget(index)
             return
 
         self._image_widget_wrapper.change_data(
             data=self._data,
-            data_mapping=get_mcorr_data_mapping(self.dataframe.iloc[index]),
+            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
             input_movie_kwargs=self.input_movie_kwargs
         )
 
+        self.params_text_area.value = format_params(self._dataframe.iloc[index].params, 0)
 
-@pd.api.extensions.register_dataframe_accessor("mcorr")
-class MCorrDataFrameVizExtension:
-    def __init__(self, df):
-        self._df = df
-
-    @validate_algo("mcorr")
-    @validate_data_options()
-    def viz(
-            self,
-            data: List[str] = None,
-            input_movie_kwargs: dict = None,
-            image_widget_kwargs: dict = None,
-    ):
-        """
-        Visualize motion correction output.
-
-        Parameters
-        ----------
-        data: list of str, default ["input", "mcorr"]
-            list of data to plot, can also be a list of lists.
-
-        input_movie_kwargs: dict, optional
-            kwargs passed to get_input_movie()
-
-        image_widget_kwargs: dict, optional
-            kwargs passed to ImageWidget
-
-        Returns
-        -------
-        ImageWidget
-            fastplotlib.ImageWidget visualization
-        """
-
+        self.current_row = index
 
 @pd.api.extensions.register_series_accessor("mcorr")
 class MCorrExtensionsViz(MCorrExtensions):

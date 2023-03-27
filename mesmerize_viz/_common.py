@@ -137,19 +137,21 @@ class ImageWidgetWrapper:
                 # update the ones which ImageWidget manages
                 self.image_widget._data[i] = array
 
-                min_max = quick_min_max(array)
-
-                self.image_widget.plot[name]["image"].vmin = min_max[0]
-                self.image_widget.plot[name]["image"].vmax = min_max[1]
-
-                # set vmin vmax slider stuff
-                data_range = np.ptp(min_max)
-                data_range_30p = np.ptp(min_max) * 0.3
-
-                self.image_widget.vmin_vmax_sliders[i].value = min_max
-                self.image_widget.vmin_vmax_sliders[i].min = min_max[0] - data_range_30p
-                self.image_widget.vmin_vmax_sliders[i].max = min_max[1] + data_range_30p
-                self.image_widget.vmin_vmax_sliders[i].step = data_range / 150
+                # I think it's useful to NOT reset the vmin vmax
+                # if necessary the user can call ImageWidget.reset_vmin_vmax()
+                # min_max = quick_min_max(array)
+                #
+                # self.image_widget.plot[name]["image"].vmin = min_max[0]
+                # self.image_widget.plot[name]["image"].vmax = min_max[1]
+                #
+                # # set vmin vmax slider stuff
+                # data_range = np.ptp(min_max)
+                # data_range_30p = np.ptp(min_max) * 0.3
+                #
+                # self.image_widget.vmin_vmax_sliders[i].value = min_max
+                # self.image_widget.vmin_vmax_sliders[i].min = min_max[0] - data_range_30p
+                # self.image_widget.vmin_vmax_sliders[i].max = min_max[1] + data_range_30p
+                # self.image_widget.vmin_vmax_sliders[i].step = data_range / 150
 
         # update the ones which ImageWidget does not manage
         self._set_non_standard_arrays(

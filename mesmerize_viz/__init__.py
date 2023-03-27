@@ -1,1 +1,1 @@
-from ._mcorr import MCorrExtensionsViz
+from ._mcorr import MCorrExtensionsViz, MCorrDataFrameVizExtension
