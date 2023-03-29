@@ -10,7 +10,7 @@ from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox, Tab, HBox, Layout, GridspecLayout, GridBox
+from ipywidgets import Textarea, VBox, HBox, Layout
 
 from ._utils import validate_data_options, ZeroArray
 from ._common import ImageWidgetWrapper
@@ -113,8 +113,10 @@ class McorrVizContainer:
 
         ]
 
+        df_show = self._dataframe[[c for c in columns if c not in hide_columns]]
+
         self.datagrid = DataGrid(
-            self._dataframe[[c for c in columns if c not in hide_columns]],  # show only a subset
+            df_show,  # show only a subset
             selection_mode="cell",
             layout={"height": "250px", "width": "750px"},
             base_row_size=24,
@@ -123,8 +125,13 @@ class McorrVizContainer:
             **data_grid_kwargs
         )
 
-        self.params_text_area = Textarea(description="params:")
-        self.params_text_area.layout = Layout(height="250px", max_height="250px", width="360px")
+        self.params_text_area = Textarea()
+        self.params_text_area.layout = Layout(
+            height="250px",
+            max_height="250px",
+            width="360px",
+            max_width="500px"
+        )
 
         # data options is private since this can't be changed once an image widget has been made
         self._data = data
@@ -144,9 +151,20 @@ class McorrVizContainer:
 
         self.current_row: int = start_index
 
+        # set the initial widget state with the start index
         self._make_image_widget(index=start_index)
         self._set_params_text_area(index=start_index)
 
+        # set initial selected row
+        self.datagrid.select(
+            row1=start_index,
+            column1=0,
+            row2=start_index,
+            column2=len(df_show.columns),
+            clear_mode="all"
+        )
+
+        # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
     def _make_image_widget(self, index):
@@ -169,7 +187,11 @@ class McorrVizContainer:
             warn("Only single row selection is currently allowed")
             return
 
-        return r1
+        # get corresponding dataframe index from currently visible dataframe
+        # since filtering etc. is possible
+        index = self.datagrid.get_visible_data().index[r1]
+
+        return index
 
     def _row_changed(self, *args):
         index = self._get_selection_row()
@@ -183,11 +205,17 @@ class McorrVizContainer:
             self._make_image_widget(index)
             return
 
-        self._image_widget_wrapper.change_data(
-            data=self._data,
-            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-            input_movie_kwargs=self.input_movie_kwargs
-        )
+        try:
+            self._image_widget_wrapper.change_data(
+                data=self._data,
+                data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
+                input_movie_kwargs=self.input_movie_kwargs
+            )
+        except Exception as e:
+            self.params_text_area.value = f"{type(e).__name__}\n" \
+                                          f"{str(e)}\n\n" \
+                                          f"See jupyter log for details"
+            raise e
 
         self._set_params_text_area(index)
 
@@ -209,7 +237,6 @@ class McorrVizContainer:
 
         # diffs and full params
         self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
-
 
     def show(self):
         """
