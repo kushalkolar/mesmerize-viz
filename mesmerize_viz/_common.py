@@ -16,7 +16,7 @@ class ImageWidgetWrapper:
             self,
             data: List[str],
             data_mapping: dict,
-            standard_mappings: List[str],
+            image_widget_managed_data: List[str],
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs: dict = None,
             image_widget_kwargs: dict = None,
@@ -51,7 +51,7 @@ class ImageWidgetWrapper:
             image_widget_kwargs = dict()
 
         # the ones which are [t, x, y] images that ImageWidget can manage by itself
-        self.standard_mappings = standard_mappings
+        self.image_widget_managed_data = image_widget_managed_data
 
         # data arrays directly passed to image widget
         data_arrays_iw = self._parse_data(
@@ -104,7 +104,7 @@ class ImageWidgetWrapper:
         data_arrays_iw = list()
 
         for d in data:
-            if d in self.standard_mappings:
+            if d in self.image_widget_managed_data:
                 func = data_mapping[d]
 
                 if d == "input":
@@ -134,10 +134,7 @@ class ImageWidgetWrapper:
 
         for i, (name, array) in enumerate(zip(data, data_arrays_iw)):
             # skip the ones which ImageWidget does not manage
-            if name not in self.standard_mappings:
-                pass
-
-            else:
+            if name in self.image_widget_managed_data:
                 # update the ones which ImageWidget manages
                 self.image_widget._data[i] = array
 
@@ -158,7 +155,7 @@ class ImageWidgetWrapper:
                 # self.image_widget.vmin_vmax_sliders[i].step = data_range / 150
 
         # update the ones which ImageWidget does not manage
-        self._set_non_standard_arrays(
+        self._set_non_managed_arrays(
             data=data,
             data_arrays_iw=data_arrays_iw,
             data_mapping=data_mapping
@@ -171,7 +168,7 @@ class ImageWidgetWrapper:
             # forces graphic data to update in all subplots
             self.image_widget.current_index = self.image_widget.current_index
 
-    def _set_non_standard_arrays(self, data, data_arrays_iw, data_mapping):
+    def _set_non_managed_arrays(self, data, data_arrays_iw, data_mapping):
         for a, n in zip(data_arrays_iw, data):
             if isinstance(a, ZeroArray):
                 # get the real data

@@ -15,17 +15,35 @@ from ipywidgets import Textarea, VBox, HBox, Layout
 from ._utils import validate_data_options, ZeroArray
 from ._common import ImageWidgetWrapper
 
+
+# these are directly manged by the image widget since they are [t, x, y]
+image_widget_managed = ["input", "mcorr"]
+
+
 projs = [
     "mean",
     "max",
     "std",
 ]
 
-# these are directly manged by the image widget since they are [t, x, y]
-standard_mappings = ["input", "mcorr"]
-
 
 def get_mcorr_data_mapping(series: pd.Series) -> dict:
+    """
+    Returns dict that maps data option str to a callable that can return the corresponding data array.
+
+    For example, ``{"input": series.get_input_movie}`` maps "input" -> series.get_input_movie
+
+    Parameters
+    ----------
+    series: pd.Series
+        row/item to get mcorr mapping
+
+    Returns
+    -------
+    dict
+        {data label: callable}
+    """
+
     projections = {k: partial(series.caiman.get_projection, k) for k in projs}
     m = {
         "input": series.caiman.get_input_movie,
@@ -62,8 +80,20 @@ class McorrVizContainer:
 
         Parameters
         ----------
-        data: list of str, default ["input", "mcorr"]
-            list of data to plot
+        data: list of str, default ["input", "mcorr", "mean", "corr"]
+            list of data to plot, valid options are:
+
+            +-------------+-------------------------------------+
+            | data option | description                         |
+            +=============+=====================================+
+            | input       | input movie                         |
+            | mcorr       | motion corrected movie              |
+            | mean        | mean projection                     |
+            | max         | max projection                      |
+            | std         | standard deviation projection       |
+            | corr        | correlation image, if computed      |
+            | pnr         | peak-noise-ratio image, if computed |
+            +-------------+-------------------------------------+
 
         start_index: int, default 0
             start index item used to set the initial data in the ImageWidget
@@ -87,7 +117,7 @@ class McorrVizContainer:
         """
         if data is None:
             # default viz
-            data = ["input", "mcorr"]
+            data = ["input", "mcorr", "mean", "mcorr"]
 
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()
@@ -171,7 +201,7 @@ class McorrVizContainer:
         self._image_widget_wrapper = ImageWidgetWrapper(
             data=self._data,
             data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-            standard_mappings=standard_mappings,
+            image_widget_managed_data=image_widget_managed,
             reset_timepoint_on_change=self._reset_timepoint_on_change,
             input_movie_kwargs=self.input_movie_kwargs,
             image_widget_kwargs=self.image_widget_kwargs
@@ -359,7 +389,7 @@ class MCorrExtensionsViz(MCorrExtensions):
         data_arrays_iw = list()
 
         for d in data:
-            if d in standard_mappings:
+            if d in image_widget_managed:
                 func = self._data_mapping[d]
 
                 if d == "input":
