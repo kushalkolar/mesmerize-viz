@@ -65,6 +65,7 @@ format_params = lambda d, t: "\n" * is_pos(t) + \
 
 class McorrVizContainer:
     """Widget that contains the DataGrid, params text box and ImageWidget"""
+
     def __init__(
         self,
             dataframe: pd.DataFrame,
@@ -109,11 +110,6 @@ class McorrVizContainer:
 
         data_grid_kwargs: dict, optional
             kwargs passed to DataGrid()
-
-        Returns
-        -------
-        ImageWidget
-            fastplotlib.ImageWidget visualization
         """
         if data is None:
             # default viz
@@ -288,6 +284,7 @@ class MCorrDataFrameVizExtension:
             self,
             data: List[str] = None,
             start_index: int = 0,
+            reset_timepoint_on_change: bool = False,
             input_movie_kwargs=None,
             image_widget_kwargs=None,
             data_grid_kwargs: dict = None,
@@ -297,11 +294,26 @@ class MCorrDataFrameVizExtension:
 
         Parameters
         ----------
-        data: list of str, default ["input", "mcorr"]
-            list of data to plot
+        data: list of str, default ["input", "mcorr", "mean", "corr"]
+            list of data to plot, valid options are:
+
+            +-------------+-------------------------------------+
+            | data option | description                         |
+            +=============+=====================================+
+            | input       | input movie                         |
+            | mcorr       | motion corrected movie              |
+            | mean        | mean projection                     |
+            | max         | max projection                      |
+            | std         | standard deviation projection       |
+            | corr        | correlation image, if computed      |
+            | pnr         | peak-noise-ratio image, if computed |
+            +-------------+-------------------------------------+
 
         start_index: int, default 0
             start index item used to set the initial data in the ImageWidget
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
 
         input_movie_kwargs: dict, optional
             kwargs passed to get_input_movie()
@@ -314,13 +326,14 @@ class MCorrDataFrameVizExtension:
 
         Returns
         -------
-        ImageWidget
-            fastplotlib.ImageWidget visualization
+        McorrVizContainer
+            widget that contains the DataGrid, params text box and ImageWidget
         """
         container = McorrVizContainer(
             dataframe=self._dataframe,
             data=data,
             start_index=start_index,
+            reset_timepoint_on_change=reset_timepoint_on_change,
             input_movie_kwargs=input_movie_kwargs,
             image_widget_kwargs=image_widget_kwargs,
             data_grid_kwargs=data_grid_kwargs
