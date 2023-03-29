@@ -17,6 +17,7 @@ class ImageWidgetWrapper:
             data: List[str],
             data_mapping: dict,
             standard_mappings: List[str],
+            reset_timepoint_on_change: bool = False,
             input_movie_kwargs: dict = None,
             image_widget_kwargs: dict = None,
     ):
@@ -27,6 +28,9 @@ class ImageWidgetWrapper:
         ----------
         data: list of str, default ["input", "mcorr"]
             list of data to plot, can also be a list of lists.
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
 
         input_movie_kwargs: dict, optional
             kwargs passed to get_input_movie()
@@ -68,7 +72,7 @@ class ImageWidgetWrapper:
             **image_widget_kwargs
         }
 
-        iw = ImageWidget(
+        self.image_widget = ImageWidget(
             data=data_arrays_iw,
             names=data,
             **image_widget_kwargs
@@ -77,14 +81,14 @@ class ImageWidgetWrapper:
         for a, n in zip(data_arrays_iw, data):
             if isinstance(a, ZeroArray):
                 # rename the existing graphic
-                iw.plot[n].graphics[0].name = "zero-array-ignore"
+                self.image_widget.plot[n].graphics[0].name = "zero-array-ignore"
                 # get the real data
                 func = data_mapping[n]
                 real_data = func()
                 # create graphic with the real data, this will not be managed by ImageWidget
-                iw.plot[n].add_image(real_data, name="image", cmap="gnuplot2")
+                self.image_widget.plot[n].add_image(real_data, name="image", cmap="gnuplot2")
 
-        self.image_widget = iw
+        self.reset_timepoint_on_change = reset_timepoint_on_change
 
     def _parse_data(
             self,
@@ -160,8 +164,12 @@ class ImageWidgetWrapper:
             data_mapping=data_mapping
         )
 
-        # set index {t: 0}
-        self.image_widget.current_index = {"t": 0}
+        if self.reset_timepoint_on_change:
+            # set index {t: 0}
+            self.image_widget.current_index = {"t": 0}
+        else:
+            # forces graphic data to update in all subplots
+            self.image_widget.current_index = self.image_widget.current_index
 
     def _set_non_standard_arrays(self, data, data_arrays_iw, data_mapping):
         for a, n in zip(data_arrays_iw, data):

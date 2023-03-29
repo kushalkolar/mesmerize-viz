@@ -10,7 +10,7 @@ from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox
+from ipywidgets import Textarea, VBox, Tab, HBox, Layout, GridspecLayout, GridBox
 
 from ._utils import validate_data_options, ZeroArray
 from ._common import ImageWidgetWrapper
@@ -43,6 +43,183 @@ format_params = lambda d, t: "\n" * is_pos(t) + \
     "\n".join(
         [": ".join(["   " * t + k, format_params(v, t + 1)]) for k, v in d.items()]
     ) if isinstance(d, dict) else str(d)
+
+
+class McorrVizContainer:
+    """Widget that contains the DataGrid, params text box and ImageWidget"""
+    def __init__(
+        self,
+            dataframe: pd.DataFrame,
+            data: List[str] = None,
+            start_index: int = 0,
+            reset_timepoint_on_change: bool = False,
+            input_movie_kwargs: dict = None,
+            image_widget_kwargs: dict = None,
+            data_grid_kwargs: dict = None,
+    ):
+        """
+        Visualize motion correction output.
+
+        Parameters
+        ----------
+        data: list of str, default ["input", "mcorr"]
+            list of data to plot
+
+        start_index: int, default 0
+            start index item used to set the initial data in the ImageWidget
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
+
+        input_movie_kwargs: dict, optional
+            kwargs passed to get_input_movie()
+
+        image_widget_kwargs: dict, optional
+            kwargs passed to ImageWidget
+
+        data_grid_kwargs: dict, optional
+            kwargs passed to DataGrid()
+
+        Returns
+        -------
+        ImageWidget
+            fastplotlib.ImageWidget visualization
+        """
+        if data is None:
+            # default viz
+            data = ["input", "mcorr"]
+
+        if data_grid_kwargs is None:
+            data_grid_kwargs = dict()
+
+        self._dataframe = dataframe
+
+        default_widths = {
+            "algo": 50,
+            'item_name': 200,
+            'input_movie_path': 120,
+            'algo_duration': 80,
+            'comments': 120,
+            'uuid': 60
+        }
+
+        columns = dataframe.columns
+        # these add clutter
+        hide_columns = [
+            "params",
+            "outputs",
+            "added_time",
+            "ran_time",
+
+        ]
+
+        self.datagrid = DataGrid(
+            self._dataframe[[c for c in columns if c not in hide_columns]],  # show only a subset
+            selection_mode="cell",
+            layout={"height": "250px", "width": "750px"},
+            base_row_size=24,
+            index_name="index",
+            column_widths=default_widths,
+            **data_grid_kwargs
+        )
+
+        self.params_text_area = Textarea(description="params:")
+        self.params_text_area.layout = Layout(height="250px", max_height="250px", width="360px")
+
+        # data options is private since this can't be changed once an image widget has been made
+        self._data = data
+
+        if input_movie_kwargs is None:
+            input_movie_kwargs = dict()
+
+        if image_widget_kwargs is None:
+            image_widget_kwargs = dict()
+
+        self.input_movie_kwargs = input_movie_kwargs
+        self.image_widget_kwargs = image_widget_kwargs
+
+        self._reset_timepoint_on_change = reset_timepoint_on_change
+        self.image_widget: ImageWidget = None
+        self._image_widget_wrapper: ImageWidgetWrapper = None
+
+        self.current_row: int = start_index
+
+        self._make_image_widget(index=start_index)
+        self._set_params_text_area(index=start_index)
+
+        self.datagrid.observe(self._row_changed, names="selections")
+
+    def _make_image_widget(self, index):
+        self._image_widget_wrapper = ImageWidgetWrapper(
+            data=self._data,
+            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
+            standard_mappings=standard_mappings,
+            reset_timepoint_on_change=self._reset_timepoint_on_change,
+            input_movie_kwargs=self.input_movie_kwargs,
+            image_widget_kwargs=self.image_widget_kwargs
+        )
+
+        self.image_widget = self._image_widget_wrapper.image_widget
+
+    def _get_selection_row(self) -> Union[int, None]:
+        r1 = self.datagrid.selections[0]["r1"]
+        r2 = self.datagrid.selections[0]["r2"]
+
+        if r1 != r2:
+            warn("Only single row selection is currently allowed")
+            return
+
+        return r1
+
+    def _row_changed(self, *args):
+        index = self._get_selection_row()
+        if index is None:
+            return
+
+        if self.current_row == index:
+            return
+
+        if self.image_widget is None:
+            self._make_image_widget(index)
+            return
+
+        self._image_widget_wrapper.change_data(
+            data=self._data,
+            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
+            input_movie_kwargs=self.input_movie_kwargs
+        )
+
+        self._set_params_text_area(index)
+
+        self.current_row = index
+
+    def _set_params_text_area(self, index):
+        row = self._dataframe.iloc[index]
+        # try and get the param diffs
+        try:
+            param_diffs = self._dataframe.caiman.get_params_diffs(
+                algo=row["algo"],
+                item_name=row["item_name"]
+            ).iloc[index]
+
+            diffs_dict = {"diffs": param_diffs}
+            diffs = f"{format_params(diffs_dict, 0)}\n\n"
+        except:
+            diffs = ""
+
+        # diffs and full params
+        self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+
+
+    def show(self):
+        """
+        Show the widget
+        """
+
+        return VBox([
+            HBox([self.datagrid, self.params_text_area]),
+            self.image_widget.show()
+        ])
 
 
 @pd.api.extensions.register_dataframe_accessor("mcorr")
@@ -83,92 +260,17 @@ class MCorrDataFrameVizExtension:
         ImageWidget
             fastplotlib.ImageWidget visualization
         """
-        if data is None:
-            # default viz
-            data = ["input", "mcorr"]
-
-        if data_grid_kwargs is None:
-            data_grid_kwargs = dict()
-
-        self.grid = DataGrid(
-            self._dataframe,
-            selection_mode="row",
-            layout={"height": "200px"},
-            **data_grid_kwargs
-        )
-        self.params_text_area = Textarea(description="params:")
-        # data options this can't be changed once an image widget has been made
-        self._data = data
-
-        if input_movie_kwargs is None:
-            input_movie_kwargs = dict()
-
-        if image_widget_kwargs is None:
-            image_widget_kwargs = dict()
-
-        self.input_movie_kwargs = input_movie_kwargs
-        self.image_widget_kwargs = image_widget_kwargs
-
-        self.image_widget: ImageWidget = None
-        self._image_widget_wrapper: ImageWidgetWrapper = None
-        self.current_row: int = start_index
-        self._make_image_widget(index=start_index)
-        self.params_text_area.value = format_params(self._dataframe.iloc[start_index].params, 0)
-
-        self.grid.observe(self._row_changed, names="selections")
-
-        self.widget = VBox(
-            [
-                self.grid,
-                self.params_text_area,
-                self.image_widget.show()
-            ]
+        container = McorrVizContainer(
+            dataframe=self._dataframe,
+            data=data,
+            start_index=start_index,
+            input_movie_kwargs=input_movie_kwargs,
+            image_widget_kwargs=image_widget_kwargs,
+            data_grid_kwargs=data_grid_kwargs
         )
 
-        return self.widget
+        return container
 
-    def _make_image_widget(self, index):
-        self._image_widget_wrapper = ImageWidgetWrapper(
-            data=self._data,
-            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-            standard_mappings=standard_mappings,
-            input_movie_kwargs=self.input_movie_kwargs,
-            image_widget_kwargs=self.image_widget_kwargs
-        )
-
-        self.image_widget = self._image_widget_wrapper.image_widget
-
-    def _get_selection_row(self) -> Union[int, None]:
-        r1 = self.grid.selections[0]["r1"]
-        r2 = self.grid.selections[0]["r2"]
-
-        if r1 != r2:
-            warn("Only single row selection is currently allowed")
-            return
-
-        return r1
-
-    def _row_changed(self, *args):
-        index = self._get_selection_row()
-        if index is None:
-            return
-
-        if self.current_row == index:
-            return
-
-        if self.image_widget is None:
-            self._make_image_widget(index)
-            return
-
-        self._image_widget_wrapper.change_data(
-            data=self._data,
-            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-            input_movie_kwargs=self.input_movie_kwargs
-        )
-
-        self.params_text_area.value = format_params(self._dataframe.iloc[index].params, 0)
-
-        self.current_row = index
 
 @pd.api.extensions.register_series_accessor("mcorr")
 class MCorrExtensionsViz(MCorrExtensions):
