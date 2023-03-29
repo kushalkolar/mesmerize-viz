@@ -4,7 +4,8 @@ from pathlib import Path
 
 install_requires = [
     "mesmerize-core",
-    "fastplotlib"
+    "fastplotlib",
+    "ipydatagrid"
 
 ]
 
