@@ -35,7 +35,29 @@ projs = [
 ]
 
 
-default_extension_kwargs = {k: dict() for k in ["input", "rcm", "rcb", "temporal"]}
+class ExtensionCallWrapper:
+    def __init__(self, extension_func: callable, kwargs: dict = None):
+        """
+        Basically like ``functools.partial`` but supports kwargs.
+
+        Parameters
+        ----------
+        extension_func: callable
+            extension function reference
+
+        kwargs:
+            kwargs to pass to the extension function when it is called
+        """
+
+        if kwargs is None:
+            self.kwargs = dict()
+        else:
+            self.kwargs = kwargs
+
+        self.func = extension_func
+
+    def __call__(self, *args, **kwargs):
+        self.func(**self.kwargs)
 
 
 def get_data_mapping(series: pd.Series, extension_kwargs: dict = None) -> dict:
@@ -47,7 +69,10 @@ def get_data_mapping(series: pd.Series, extension_kwargs: dict = None) -> dict:
     Parameters
     ----------
     series: pd.Series
-        row/item to get mcorr mapping
+        row/item to get mapping from
+
+    extension_kwargs: dict, optional
+        optional kwargs for each of the extension functions
 
     Returns
     -------
@@ -55,14 +80,24 @@ def get_data_mapping(series: pd.Series, extension_kwargs: dict = None) -> dict:
         {data label: callable}
     """
 
+    default_extension_kwargs = {k: dict() for k in ["input", "rcm", "rcb", "temporal"]}
+    ext_kwargs = {
+        **default_extension_kwargs,
+        **extension_kwargs
+    }
 
     projections = {k: partial(series.caiman.get_projection, k) for k in projs}
+
     m = {
-        "input": series.caiman.get_input_movie,
-        "rcm": series.cnmf.get_output,
-        "corr": series.caiman.get_corr_image,
+        "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
+        "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
+        "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
+        "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
+        "temporal": ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs["temporal"]),
+        "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
         **projections
     }
+
     return m
 
 
