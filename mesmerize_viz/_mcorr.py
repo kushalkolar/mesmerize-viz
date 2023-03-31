@@ -12,7 +12,7 @@ from fastplotlib import ImageWidget
 from ipydatagrid import DataGrid
 from ipywidgets import Textarea, VBox, HBox, Layout
 
-from ._utils import validate_data_options, ZeroArray
+from ._utils import validate_data_options, ZeroArray, format_params
 from ._common import ImageWidgetWrapper
 
 
@@ -52,15 +52,6 @@ def get_mcorr_data_mapping(series: pd.Series) -> dict:
         **projections
     }
     return m
-
-
-# to format params dict into yaml-like string
-is_pos = lambda x: 1 if x > 0 else 0
-# this doesn't work without the lambda, yes it is ugly
-format_params = lambda d, t: "\n" * is_pos(t) + \
-    "\n".join(
-        [": ".join(["   " * t + k, format_params(v, t + 1)]) for k, v in d.items()]
-    ) if isinstance(d, dict) else str(d)
 
 
 class McorrVizContainer:
