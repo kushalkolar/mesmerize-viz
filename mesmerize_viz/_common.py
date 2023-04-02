@@ -114,6 +114,10 @@ class ImageWidgetWrapper:
 
                 data_arrays_iw.append(a)
 
+            if d == "empty":
+                zero_array = ZeroArray(ndim=data_arrays_iw[0].ndim)
+                data_arrays_iw.append(zero_array)
+
             else:
                 # make a placeholder array to keep imagewidget happy
                 # hacky but this is the best way for now
