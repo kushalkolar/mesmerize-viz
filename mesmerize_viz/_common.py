@@ -114,7 +114,7 @@ class ImageWidgetWrapper:
 
                 data_arrays_iw.append(a)
 
-            if d == "empty":
+            elif d == "empty":
                 zero_array = ZeroArray(ndim=data_arrays_iw[0].ndim)
                 data_arrays_iw.append(zero_array)
 
