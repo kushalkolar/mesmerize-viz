@@ -33,6 +33,11 @@ data_options = [
 ]
 
 
+for option in ["rcm", "rcb"]:
+    for proj in ["mean", "min", "max", "std"]:
+        data_options.append(f"{option}-{proj}")
+
+
 projs = [
     "mean",
     "max",
@@ -120,6 +125,7 @@ def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loa
         "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
         "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
         "temporal": ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs["temporal"]),
+        "temporal-stack": ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs["temporal"]),
         "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
         "empty": ZeroArray,
         **projections,
