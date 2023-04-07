@@ -5,6 +5,7 @@ import math
 import itertools
 from warnings import warn
 
+import ipywidgets
 import numpy as np
 import pandas as pd
 from mesmerize_core.arrays._base import LazyArray
@@ -57,7 +58,7 @@ data_options += projs
 
 
 class ExtensionCallWrapper:
-    def __init__(self, extension_func: callable, kwargs: dict = None):
+    def __init__(self, extension_func: callable, kwargs: dict = None, attr: str = None):
         """
         Basically like ``functools.partial`` but supports kwargs.
 
@@ -66,8 +67,12 @@ class ExtensionCallWrapper:
         extension_func: callable
             extension function reference
 
-        kwargs:
+        kwargs: dict
             kwargs to pass to the extension function when it is called
+
+        attr: str, optional
+            return an attribute of the callable's output instead of the return value of the callable.
+            Example: if using rcm, can set ``attr="max_image"`` to return the max proj of the RCM.
         """
 
         if kwargs is None:
@@ -76,9 +81,13 @@ class ExtensionCallWrapper:
             self.kwargs = kwargs
 
         self.func = extension_func
+        self.attr = attr
 
     def __call__(self, *args, **kwargs):
-        self.func(**self.kwargs)
+        rval = self.func(**self.kwargs)
+
+        if self.attr is not None:
+            return getattr(rval, self.attr)
 
 
 def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
@@ -118,6 +127,9 @@ def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loa
     # make ExtensionCallWrapers for other data loaders
     for option in list(other_data_loaders.keys()):
         other_data_loaders_mapping[option] = ExtensionCallWrapper(other_data_loaders[option], ext_kwargs[option])
+
+    rcm_rcb_projs = dict()
+    for
 
     m = {
         "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
@@ -272,8 +284,9 @@ class GridPlotWrapper:
             self,
             data: List[str],
             data_mapping: Dict[str, ExtensionCallWrapper],
-            reset_timepoint_on_change: bool,
-            gridplot_kwargs: dict,
+            data_graphic_kwargs: dict = None,
+            slider_widget: ipywidgets.IntSlider = None,
+            gridplot_kwargs: dict = None,
     ):
         """
         Visualize motion correction output.
@@ -286,11 +299,14 @@ class GridPlotWrapper:
         data_mapping: dict
             maps {"data_option": callable}
 
-        reset_timepoint_on_change: bool, default False
-            reset the timepoint when changing items/rows
+        data_graphic_kwargs: dict
+            passed add_<graphic> for corresponding graphic
 
-        image_widget_kwargs: dict, optional
-            kwargs passed to ImageWidget
+        slider_widget: ipywidgets.IntSlider
+            time slider from ImageWidget
+
+        gridplot_kwargs: dict, optional
+            kwargs passed to GridPlot
 
         Returns
         -------
@@ -298,12 +314,19 @@ class GridPlotWrapper:
             fastplotlib.GridPlot visualization
         """
 
-        self.line_sliders: List[LineSlider] = list()
+        self._data = data
 
-        data_arrays  = self._parse_data(
-            data=data,
+        if data_graphic_kwargs is None:
+            data_graphic_kwargs = dict()
+
+        if gridplot_kwargs is None:
+            gridplot_kwargs = dict()
+
+        data_arrays = self._parse_data(
             data_mapping=data_mapping,
         )
+
+        self._slider_widget = slider_widget
 
         _gridplot_kwargs = {"shape": (1, len(data))}
         _gridplot_kwargs.update(gridplot_kwargs)
@@ -312,28 +335,18 @@ class GridPlotWrapper:
 
         self.temporal_graphics: List[graphics.LineCollection] = list()
         self.temporal_stack_graphics: List[graphics.LineStack] = list()
+        self.image_graphics: List[graphics.ImageGraphic] = list()
 
-        # TODO: need to figure out how to properly garbage collect graphic when changing to different batch item
-        # TODO: because length of LineCollection graphics will vary
-        for i, subplot in enumerate(gridplot):
-            # skip
-            if d[i] == "empty":
-                continue
+        self._line_sliders: List[LineSlider] = list()
 
-            elif d[i] == "temporal":
-                t = subplot.add_line_collection(
-                    data_arrays[i], name="lines"
-                )
-                subplot.name = d[i]
-                self.temporal_graphics.append(t)
+        self.line_sliders: List[LineSlider] = list()
 
-            elif d[i] == "temporal-stack":
-                pass
+        self.change_data(data_mapping)
 
-    def _parse_data(self, data, data_mapping) -> List[np.ndarray]:
+    def _parse_data(self, data_mapping) -> List[np.ndarray]:
         data_arrays = list()
 
-        for d in data:
+        for d in self._data:
             if d == "empty":
                 data_arrays.append(None)
             else:
@@ -343,12 +356,45 @@ class GridPlotWrapper:
 
         return data_arrays
 
+    def change_data(self, data_mapping: Dict[str, callable]):
+        # clear existing subplots
+        for subplot in self.gridplot:
+            subplot.clear()
 
-    def change_data(self):
-        pass
+        # new data arrays
+        data_arrays = self._parse_data(data_mapping)
 
-    def set_timepoint(self):
-        pass
+        for i, subplot in enumerate(self.gridplot):
+            # skip
+            if self._data[i] == "empty":
+                continue
+
+            elif self._data[i] == "temporal":
+                t = subplot.add_line_collection(
+                    data_arrays[i], name="lines"
+                )
+                subplot.name = self._data[i]
+                self.temporal_graphics.append(t)
+                ls = LineSlider(
+                    x_pos=0,
+                    bounds=(data_arrays[i].min(), t.position.y)
+                )
+                subplot.add_graphic(ls)
+
+            elif self._data[i] == "temporal-stack":
+                t = subplot.add_line_stack(
+                    data_arrays[i], names="lines"
+                )
+                self.temporal_graphics.append(t)
+                ls = LineSlider(
+                    x_pos=0,
+                    bounds=(data_arrays[i].min(), t.position.y)
+                )
+                subplot.add_graphic(ls)
+
+            else:
+                img = subplot.add_image(data_arrays)
+                self.image_graphics.append(img)
 
 
 # TODO: This use a GridPlot that's manually managed because the timescale of
@@ -517,7 +563,6 @@ class CNMFVizContainer:
 
     def _make_gridplot(self, sub_data, index) -> GridPlot:
         pass
-
 
     def _make_image_widget(self, sub_data: List[str], index: int) -> ImageWidgetWrapper:
         self._image_widget_wrapper = ImageWidgetWrapper(
