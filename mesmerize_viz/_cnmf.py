@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from typing import *
 from functools import partial
 import math
@@ -8,19 +7,18 @@ from warnings import warn
 import ipywidgets
 import numpy as np
 import pandas as pd
+
 from mesmerize_core.arrays._base import LazyArray
 from mesmerize_core.utils import quick_min_max
-from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 
 from fastplotlib import ImageWidget, GridPlot, graphics
 from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
 from fastplotlib.utils import calculate_gridshape
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox, HBox, Layout
+from ipywidgets import Textarea, VBox, HBox, Layout, Checkbox
 
-from ._utils import validate_data_options, ZeroArray, format_params
-from ._common import ImageWidgetWrapper
+from ._utils import ZeroArray, format_params
 
 
 # basic data options
@@ -168,6 +166,7 @@ def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_dat
         "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
         "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
         "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
+        "contours": ExtensionCallWrapper(series.cnmf.get_contours, ext_kwargs["contours"]),
         "empty": ZeroArray,
         **temporal_mappings,
         **projections,
@@ -359,6 +358,8 @@ class GridPlotWrapper:
 
         self._cmap = cmap
 
+        self.component_colors = component_colors
+
         # self._slider_ipywidget = slider_ipywidget
 
         self.reset_timepoint_on_change = reset_timepoint_on_change
@@ -373,6 +374,7 @@ class GridPlotWrapper:
 
         self.temporal_graphics: List[graphics.LineCollection] = list()
         self.temporal_stack_graphics: List[graphics.LineStack] = list()
+        self.heatmap_graphics: List[graphics.HeatmapGraphic] = list()
         self.image_graphics: List[graphics.ImageGraphic] = list()
         self.contour_graphics: List[graphics.LineCollection] = list()
 
@@ -444,14 +446,30 @@ class GridPlotWrapper:
         # new data arrays
         data_arrays = self._parse_data(data_options=self._data, data_mapping=data_mapping)
 
+        # rval is (contours, centeres of masses)
+        contours = data_mapping["contours"]()[0]
+
+        if self.component_colors == "random":
+            n_components = len(contours)
+            component_colors = np.random.rand(n_components, 4).astype(np.float32)
+            component_colors[:, -1] = 1
+        else:
+            component_colors = self.component_colors
+
+        # change data for all gridplots
         for sub_data, sub_data_arrays, gridplot in zip(self._data, data_arrays, self.gridplots):
-            self._change_data_gridplot(sub_data, sub_data_arrays, gridplot)
+            self._change_data_gridplot(sub_data, sub_data_arrays, gridplot, contours, component_colors)
+
+        # connect events
+        self._connect_events()
 
     def _change_data_gridplot(
             self,
             data: List[str],
             data_arrays: List[np.ndarray],
-            gridplot: GridPlot
+            gridplot: GridPlot,
+            contours,
+            component_colors
     ):
 
         if self.reset_timepoint_on_change:
@@ -468,30 +486,53 @@ class GridPlotWrapper:
 
             elif data_option == "temporal":
                 current_graphic = subplot.add_line_collection(
-                    data_array, name="components", **graphic_kwargs
+                    data_array,
+                    colors=component_colors,
+                    name="components",
+                    **graphic_kwargs
                 )
+                current_graphic[:].present.add_event_handler(subplot.auto_scale)
                 self.temporal_graphics.append(current_graphic)
+
+                # otherwise the plot has nothing in it which causes issues
+                subplot.add_line(np.random.rand(data_array.shape[1]), colors=(0, 0, 0, 0), name="pseudo-line")
 
             elif data_option == "temporal-stack":
                 current_graphic = subplot.add_line_stack(
-                    data_array, name="components", **graphic_kwargs
+                    data_array,
+                    colors=component_colors,
+                    name="components",
+                    **graphic_kwargs
                 )
                 self.temporal_stack_graphics.append(current_graphic)
 
             elif data_option == "heatmap":
                 current_graphic = subplot.add_heatmap(
-                    data_array, name="components", **graphic_kwargs
+                    data_array,
+                    colors=component_colors,
+                    name="components",
+                    **graphic_kwargs
                 )
+                self.heatmap_graphics.append(current_graphic)
 
             else:
                 img_graphic = subplot.add_image(
                     data_array[self._current_frame_index],
                     cmap=self.cmap,
+                    name="image",
                     **graphic_kwargs
                 )
 
                 self.image_graphics.append(img_graphic)
                 self.image_graphic_arrays.append(data_array)
+
+                contour_graphic = subplot.add_line_collection(
+                    contours,
+                    colors=component_colors,
+                    name="contours"
+                )
+
+                self.contour_graphics.append(contour_graphic)
 
             subplot.name = data_option
 
@@ -506,6 +547,42 @@ class GridPlotWrapper:
 
         for ls in self.linear_selectors:
             ls.selection.add_event_handler(self.set_frame_index)
+
+    def _euclidean(self, source, target, event, new_data):
+        """maps click events to contour"""
+        # calculate coms of line collection
+        indices = np.array(event.pick_info["index"])
+
+        coms = list()
+
+        for contour in target.graphics:
+            coors = contour.data()[~np.isnan(contour.data()).any(axis=1)]
+            com = coors.mean(axis=0)
+            coms.append(com)
+
+        # euclidean distance to find closest index of com
+        indices = np.append(indices, [0])
+
+        ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
+
+        target._set_feature(feature="colors", new_data=new_data, indices=ix)
+
+        return None
+
+    def _connect_events(self):
+        for image_graphic, contour_graphic in zip(self.image_graphics, self.contour_graphics):
+            image_graphic.link(
+                "click",
+                target=contour_graphic,
+                feature="colors",
+                new_data="w",
+                callback=self._euclidean
+            )
+
+            contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=5)
+
+            for temporal_graphic in self.temporal_graphics:
+                contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
 
     def set_frame_index(self, ev):
         # 0 because this will return the same number repeated * n_components
@@ -709,12 +786,23 @@ class CNMFVizContainer:
     def show(self):
         """Show the widget"""
 
-        return VBox(
+        self.show_all_checkbox = Checkbox(value=True, description="Show all components")
+
+        widget = VBox(
             [
                 HBox([self.datagrid, self.params_text_area]),
+                self.show_all_checkbox,
                 VBox([gp.show() for gp in self.gridplots])
             ]
         )
+
+        self.show_all_checkbox.observe(self._toggle_show_all, "value")
+
+        return widget
+
+    def _toggle_show_all(self, change):
+        for line_collection in self._gridplot_wrapper.temporal_graphics:
+            line_collection[:].present = change["new"]
 
     def close(self):
         """Close the widget"""
