@@ -104,7 +104,7 @@ class McorrVizContainer:
         """
         if data is None:
             # default viz
-            data = ["input", "mcorr", "mean", "mcorr"]
+            data = ["input", "mcorr", "mean", "corr"]
 
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()

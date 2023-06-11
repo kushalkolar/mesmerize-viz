@@ -11,32 +11,47 @@ import pandas as pd
 from mesmerize_core.arrays._base import LazyArray
 from mesmerize_core.utils import quick_min_max
 from mesmerize_core.caiman_extensions._utils import validate as validate_algo
+
 from fastplotlib import ImageWidget, GridPlot, graphics
-from fastplotlib.graphics.line_slider import LineSlider
+from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
+from fastplotlib.utils import calculate_gridshape
 
 from ipydatagrid import DataGrid
 from ipywidgets import Textarea, VBox, HBox, Layout
 
-from ._utils import validate_data_options, ZeroArray
+from ._utils import validate_data_options, ZeroArray, format_params
 from ._common import ImageWidgetWrapper
 
 
-data_options = [
+# basic data options
+VALID_DATA_OPTIONS = [
     "input",
-    "temporal",
-    "temporal-stack",
     "contours",
     "rcm",
     "rcb",
     "residuals",
     "corr",
     "pnr",
+    "empty"
 ]
 
 
+TEMPORAL_OPTIONS = [
+    "temporal",
+    "temporal-stack",
+    "heatmap",
+]
+
+VALID_DATA_OPTIONS += TEMPORAL_OPTIONS
+
+# RCM and RCB projections
+rcm_rcb_proj_options = list()
+
 for option in ["rcm", "rcb"]:
     for proj in ["mean", "min", "max", "std"]:
-        data_options.append(f"{option}-{proj}")
+        rcm_rcb_proj_options.append(f"{option}-{proj}")
+
+VALID_DATA_OPTIONS += rcm_rcb_proj_options
 
 
 projs = [
@@ -54,7 +69,7 @@ image_widget_managed = [
     "residuals"
 ]
 
-data_options += projs
+VALID_DATA_OPTIONS += projs
 
 
 class ExtensionCallWrapper:
@@ -89,8 +104,10 @@ class ExtensionCallWrapper:
         if self.attr is not None:
             return getattr(rval, self.attr)
 
+        return rval
 
-def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
+
+def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
     """
     Returns dict that maps data option str to a callable that can return the corresponding data array.
 
@@ -112,8 +129,13 @@ def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loa
     dict
         {data label: callable}
     """
+    if data_kwargs is None:
+        data_kwargs = dict()
 
-    default_extension_kwargs = {k: dict() for k in data_options + list(other_data_loaders.keys())}
+    if other_data_loaders is None:
+        other_data_loaders = dict()
+
+    default_extension_kwargs = {k: dict() for k in VALID_DATA_OPTIONS + list(other_data_loaders.keys())}
 
     ext_kwargs = {
         **default_extension_kwargs,
@@ -129,18 +151,27 @@ def get_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loa
         other_data_loaders_mapping[option] = ExtensionCallWrapper(other_data_loaders[option], ext_kwargs[option])
 
     rcm_rcb_projs = dict()
-    for
+    for proj in ["mean", "min", "max", "std"]:
+        rcm_rcb_projs[f"rcm-{proj}"] = ExtensionCallWrapper(
+            series.cnmf.get_rcm,
+            ext_kwargs["rcm"],
+            attr=f"{proj}_image"
+        )
+
+    temporal_mappings = {
+        k: ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs[k]) for k in TEMPORAL_OPTIONS
+    }
 
     m = {
         "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
         "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
         "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
         "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
-        "temporal": ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs["temporal"]),
-        "temporal-stack": ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs["temporal"]),
         "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
         "empty": ZeroArray,
+        **temporal_mappings,
         **projections,
+        **rcm_rcb_projs,
         **other_data_loaders_mapping
     }
 
@@ -282,36 +313,38 @@ class GridPlotWrapper:
 
     def __init__(
             self,
-            data: List[str],
+            data: Union[List[str], List[List[str]]],
             data_mapping: Dict[str, ExtensionCallWrapper],
+            reset_timepoint_on_change: bool = False,
             data_graphic_kwargs: dict = None,
-            slider_widget: ipywidgets.IntSlider = None,
+            # slider_ipywidget: ipywidgets.IntSlider = None,
             gridplot_kwargs: dict = None,
+            cmap: str = "gnuplot2",
+            component_colors: str = "random"
     ):
         """
         Visualize motion correction output.
 
         Parameters
         ----------
-        data: list of str
-            list of data to plot, example ["temporal", "temporal-stack"]
+        data: list of str or list of list of str
+            list of data to plot, examples: ["input", "temporal-stack"], [["temporal"], ["rcm", "rcb"]]
 
         data_mapping: dict
             maps {"data_option": callable}
 
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
+
         data_graphic_kwargs: dict
             passed add_<graphic> for corresponding graphic
 
-        slider_widget: ipywidgets.IntSlider
+        slider_ipywidget: ipywidgets.IntSlider
             time slider from ImageWidget
 
         gridplot_kwargs: dict, optional
             kwargs passed to GridPlot
 
-        Returns
-        -------
-        GridPlot
-            fastplotlib.GridPlot visualization
         """
 
         self._data = data
@@ -319,36 +352,59 @@ class GridPlotWrapper:
         if data_graphic_kwargs is None:
             data_graphic_kwargs = dict()
 
+        self.data_graphic_kwargs = data_graphic_kwargs
+
         if gridplot_kwargs is None:
             gridplot_kwargs = dict()
 
-        data_arrays = self._parse_data(
-            data_mapping=data_mapping,
-        )
+        self._cmap = cmap
 
-        self._slider_widget = slider_widget
+        # self._slider_ipywidget = slider_ipywidget
 
-        _gridplot_kwargs = {"shape": (1, len(data))}
-        _gridplot_kwargs.update(gridplot_kwargs)
+        self.reset_timepoint_on_change = reset_timepoint_on_change
 
-        self.gridplot = GridPlot(**_gridplot_kwargs)
+        self.gridplots: List[GridPlot] = list()
+
+        # gridplot for each sublist
+        for sub_data in self._data:
+            _gridplot_kwargs = {"shape": calculate_gridshape(len(sub_data))}
+            _gridplot_kwargs.update(gridplot_kwargs)
+            self.gridplots.append(GridPlot(**_gridplot_kwargs))
 
         self.temporal_graphics: List[graphics.LineCollection] = list()
         self.temporal_stack_graphics: List[graphics.LineStack] = list()
         self.image_graphics: List[graphics.ImageGraphic] = list()
+        self.contour_graphics: List[graphics.LineCollection] = list()
 
-        self._line_sliders: List[LineSlider] = list()
+        self._managed_graphics: List[list] = [
+            self.temporal_graphics,
+            self.temporal_stack_graphics,
+            self.image_graphics,
+            self.contour_graphics
+        ]
 
-        self.line_sliders: List[LineSlider] = list()
+        # to store only image data in a 1:1 mapping to the graphics list
+        self.image_graphic_arrays: List[np.ndarray] = list()
+
+        self.linear_selectors: List[LinearSelector] = list()
+
+        self._current_frame_index: int = 0
 
         self.change_data(data_mapping)
 
-    def _parse_data(self, data_mapping) -> List[np.ndarray]:
+    def _parse_data(self, data_options, data_mapping) -> List[List[np.ndarray]]:
+        """
+        Returns nested list of array-like
+        """
         data_arrays = list()
 
-        for d in self._data:
-            if d == "empty":
+        for d in data_options:
+            if isinstance(d, list):
+                data_arrays.append(self._parse_data(d, data_mapping))
+
+            elif d == "empty":
                 data_arrays.append(None)
+
             else:
                 func = data_mapping[d]
                 a = func()
@@ -356,48 +412,113 @@ class GridPlotWrapper:
 
         return data_arrays
 
+    @property
+    def cmap(self) -> str:
+        return self._cmap
+
+    @cmap.setter
+    def cmap(self, cmap: str):
+        for g in self.image_graphics:
+            g.cmap = cmap
+
+    # @property
+    # def component_colors(self) -> Any:
+    #     pass
+    #
+    # @component_colors.setter
+    # def component_colors(self, colors: Any):
+    #     for collection in self.contour_graphics:
+    #         for g in collection.graphics:
+    #
+
     def change_data(self, data_mapping: Dict[str, callable]):
+        for l in self._managed_graphics:
+            l.clear()
+
+        self.image_graphic_arrays.clear()
+
         # clear existing subplots
-        for subplot in self.gridplot:
-            subplot.clear()
+        for gp in self.gridplots:
+            gp.clear()
 
         # new data arrays
-        data_arrays = self._parse_data(data_mapping)
+        data_arrays = self._parse_data(data_options=self._data, data_mapping=data_mapping)
 
-        for i, subplot in enumerate(self.gridplot):
+        for sub_data, sub_data_arrays, gridplot in zip(self._data, data_arrays, self.gridplots):
+            self._change_data_gridplot(sub_data, sub_data_arrays, gridplot)
+
+    def _change_data_gridplot(
+            self,
+            data: List[str],
+            data_arrays: List[np.ndarray],
+            gridplot: GridPlot
+    ):
+
+        if self.reset_timepoint_on_change:
+            self._current_frame_index = 0
+
+        for data_option, data_array, subplot in zip(data, data_arrays, gridplot):
+            if data_option in self.data_graphic_kwargs.keys():
+                graphic_kwargs = self.data_graphic_kwargs[data_option]
+            else:
+                graphic_kwargs = dict()
             # skip
-            if self._data[i] == "empty":
+            if data_option == "empty":
                 continue
 
-            elif self._data[i] == "temporal":
-                t = subplot.add_line_collection(
-                    data_arrays[i], name="lines"
+            elif data_option == "temporal":
+                current_graphic = subplot.add_line_collection(
+                    data_array, name="components", **graphic_kwargs
                 )
-                subplot.name = self._data[i]
-                self.temporal_graphics.append(t)
-                ls = LineSlider(
-                    x_pos=0,
-                    bounds=(data_arrays[i].min(), t.position.y)
-                )
-                subplot.add_graphic(ls)
+                self.temporal_graphics.append(current_graphic)
 
-            elif self._data[i] == "temporal-stack":
-                t = subplot.add_line_stack(
-                    data_arrays[i], names="lines"
+            elif data_option == "temporal-stack":
+                current_graphic = subplot.add_line_stack(
+                    data_array, name="components", **graphic_kwargs
                 )
-                self.temporal_graphics.append(t)
-                ls = LineSlider(
-                    x_pos=0,
-                    bounds=(data_arrays[i].min(), t.position.y)
+                self.temporal_stack_graphics.append(current_graphic)
+
+            elif data_option == "heatmap":
+                current_graphic = subplot.add_heatmap(
+                    data_array, name="components", **graphic_kwargs
                 )
-                subplot.add_graphic(ls)
 
             else:
-                img = subplot.add_image(data_arrays)
-                self.image_graphics.append(img)
+                img_graphic = subplot.add_image(
+                    data_array[self._current_frame_index],
+                    cmap=self.cmap,
+                    **graphic_kwargs
+                )
+
+                self.image_graphics.append(img_graphic)
+                self.image_graphic_arrays.append(data_array)
+
+            subplot.name = data_option
+
+            if data_option in TEMPORAL_OPTIONS:
+                self.linear_selectors.append(current_graphic.add_linear_selector())
+                subplot.camera.maintain_aspect = False
+
+        if len(self.linear_selectors) > 0:
+            self._synchronizer = Synchronizer(
+                *self.linear_selectors, key_bind=None
+            )
+
+        for ls in self.linear_selectors:
+            ls.selection.add_event_handler(self.set_frame_index)
+
+    def set_frame_index(self, ev):
+        # 0 because this will return the same number repeated * n_components
+        index = ev.pick_info["selected_index"][0]
+        for image_graphic, full_array in zip(self.image_graphics, self.image_graphic_arrays):
+            # txy data
+            if full_array.ndim > 2:
+                image_graphic.data = full_array[index]
+
+        self._current_frame_index = index
 
 
-# TODO: This use a GridPlot that's manually managed because the timescale of
+# TODO: This use a GridPlot that's manually managed because the timescales of calcium ad behavior won't match
 class CNMFVizContainer:
     """Widget that contains the DataGrid, params text box fastplotlib GridPlot, etc"""
 
@@ -407,11 +528,13 @@ class CNMFVizContainer:
             data: List[str] = None,
             start_index: int = 0,
             reset_timepoint_on_change: bool = False,
+            data_graphic_kwargs: dict = None,
+            gridplot_kwargs: dict = None,
+            cmap: str = "gnuplot2",
+            component_colors: str = "random",
             calcium_framerate: float = None,
             other_data_loaders: Dict[str, callable] = None,
             data_kwargs: dict = None,
-            image_widget_kwargs: dict = None,
-            plot_widget_kwargs: List[dict] = None,
             data_grid_kwargs: dict = None,
     ):
         """
@@ -439,29 +562,32 @@ class CNMFVizContainer:
             kwargs passed to corresponding extension function to load data.
             example: ``{"temporal": {"component_ixs": "good"}}``
 
-        plot_widget_kwargs: List[dict]
-            kwargs passed to GridPlots or ImageWidget, useful when ``data`` is a list of lists.
-
-        image_widget_kwargs
+        gridplot_kwargs: List[dict]
+            kwargs passed to GridPlot
 
         data_grid_kwargs
         """
 
         if data is None:
-            data = [["temporal"], ["contours", "rcm", "rcb", "residuals"]]
+            data = [["temporal"], ["input", "rcm", "rcb", "residuals"]]
 
         if other_data_loaders is None:
             other_data_loaders = dict()
 
-        self._other_data_loaders = other_data_loaders
+        # simple list of str, single gridplot
+        if all(isinstance(option, str) for option in data):
+            data = [data]
 
-        self.reset_timepoint_on_change = reset_timepoint_on_change
+        if not all(isinstance(option, list) for option in data):
+            raise TypeError(
+                "Must pass list of str or nested list of str"
+            )
 
         # make sure data options are valid
         for d in list(itertools.chain(*data)):
-            if d not in data_options or d not in dataframe.columns or d != "empty":
+            if (d not in VALID_DATA_OPTIONS) and (d not in dataframe.columns):
                 raise ValueError(
-                    f"`data` options are: {data_options} or a DataFrame column name: {dataframe.columns}\n"
+                    f"`data` options are: {VALID_DATA_OPTIONS} or a DataFrame column name: {dataframe.columns}\n"
                     f"You have passed: {d}"
                 )
 
@@ -472,6 +598,8 @@ class CNMFVizContainer:
                         f"If you provide a non-cnmf related data option you must also provide a "
                         f"data loader callable for it to `other_data_loaders`"
                     )
+
+        self._other_data_loaders = other_data_loaders
 
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()
@@ -523,53 +651,205 @@ class CNMFVizContainer:
         if data_kwargs is None:
             data_kwargs = dict()
 
-        if image_widget_kwargs is None:
-            image_widget_kwargs = dict()
-
         self.data_kwargs = data_kwargs
-        self.image_widget_kwargs = image_widget_kwargs
 
         self.current_row: int = start_index
 
-        self.iw_managed = image_widget_managed.copy()
-        self.iw_managed += dataframe.columns.tolist()
-
-        # TODO: check if data is list of lists
-        # TODO: if all elements in a sublist are non-image widget managed just make it a gridplot
-
-        self.gridplots: List[GridPlot] = list()
-        self._image_widget_wrappers: List[ImageWidgetWrapper] = list()
-
-        self.plots: List[Union[GridPlot, ImageWidgetWrapper]] = list()
-
-        self._temporal_graphics: List[graphics.LineCollection] = list()
-        self._contour_graphics: List[graphics.LineCollection] = list()
-
-        if plot_widget_kwargs is None:
-            plot_widget_kwargs = [dict() for i in range(len(data))]
-
-        # list of lists
-        if all(isinstance(d, list) for d in data):
-            for sub_list in data:
-                if all(option not in self.iw_managed for option in sub_list):
-                    gp = GridPlot(
-                        shape=(1, len(sub_list)),
-                        **plot_widget_kwargs
-                    )
-
-                    self.plots.append(gp)
-                else: # managed by imagewidget
-                    iw = self._make_image_widget(sub_list, index=start_index)
-
-    def _make_gridplot(self, sub_data, index) -> GridPlot:
-        pass
-
-    def _make_image_widget(self, sub_data: List[str], index: int) -> ImageWidgetWrapper:
-        self._image_widget_wrapper = ImageWidgetWrapper(
-            data=sub_data,
-            data_mapping=get_data_mapping(self._dataframe.iloc[index], self.data_kwargs, self._other_data_loaders),
-            image_widget_managed_data=self.iw_managed,
-            reset_timepoint_on_change=self.reset_timepoint_on_change,
-            input_movie_kwargs=dict(),
-            image_widget_kwargs=self.image_widget_kwargs
+        self._make_gridplot(
+            start_index=start_index,
+            reset_timepoint_on_change=reset_timepoint_on_change,
+            data_graphic_kwargs=data_graphic_kwargs,
+            gridplot_kwargs=gridplot_kwargs,
+            cmap=cmap,
+            component_colors=component_colors,
         )
+
+        self._set_params_text_area(index=start_index)
+
+        # set initial selected row
+        self.datagrid.select(
+            row1=start_index,
+            column1=0,
+            row2=start_index,
+            column2=len(df_show.columns),
+            clear_mode="all"
+        )
+
+        # callback when row changed
+        self.datagrid.observe(self._row_changed, names="selections")
+
+    def _make_gridplot(
+            self,
+            start_index: int,
+            reset_timepoint_on_change: bool,
+            data_graphic_kwargs: dict,
+            gridplot_kwargs: dict,
+            cmap: str,
+            component_colors: str,
+    ):
+
+        data_mapping = get_cnmf_data_mapping(
+            self._dataframe.iloc[start_index],
+            self.data_kwargs
+        )
+
+        self._gridplot_wrapper = GridPlotWrapper(
+            data=self._data,
+            data_mapping=data_mapping,
+            reset_timepoint_on_change=reset_timepoint_on_change,
+            data_graphic_kwargs=data_graphic_kwargs,
+            gridplot_kwargs=gridplot_kwargs,
+            cmap=cmap,
+            component_colors=component_colors
+
+        )
+
+        self.gridplots = self._gridplot_wrapper.gridplots
+
+    def show(self):
+        """Show the widget"""
+
+        return VBox(
+            [
+                HBox([self.datagrid, self.params_text_area]),
+                VBox([gp.show() for gp in self.gridplots])
+            ]
+        )
+
+    def close(self):
+        """Close the widget"""
+        for gp in self.gridplots:
+            gp.close()
+
+    def _get_selection_row(self) -> Union[int, None]:
+        r1 = self.datagrid.selections[0]["r1"]
+        r2 = self.datagrid.selections[0]["r2"]
+
+        if r1 != r2:
+            warn("Only single row selection is currently allowed")
+            return
+
+        # get corresponding dataframe index from currently visible dataframe
+        # since filtering etc. is possible
+        index = self.datagrid.get_visible_data().index[r1]
+
+        return index
+
+    def _row_changed(self, *args):
+        index = self._get_selection_row()
+        if index is None:
+            return
+
+        if self.current_row == index:
+            return
+
+        try:
+            data_mapping = get_cnmf_data_mapping(
+                self._dataframe.iloc[index],
+                self.data_kwargs
+            )
+            self._gridplot_wrapper.change_data(data_mapping)
+        except Exception as e:
+            self.params_text_area.value = f"{type(e).__name__}\n" \
+                                          f"{str(e)}\n\n" \
+                                          f"See jupyter log for details"
+            raise e
+
+        self._set_params_text_area(index)
+
+        self.current_row = index
+
+    def _set_params_text_area(self, index):
+        row = self._dataframe.iloc[index]
+        # try and get the param diffs
+        try:
+            param_diffs = self._dataframe.caiman.get_params_diffs(
+                algo=row["algo"],
+                item_name=row["item_name"]
+            ).iloc[index]
+
+            diffs_dict = {"diffs": param_diffs}
+            diffs = f"{format_params(diffs_dict, 0)}\n\n"
+        except:
+            diffs = ""
+
+        # diffs and full params
+        self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+
+
+@pd.api.extensions.register_dataframe_accessor("cnmf")
+class CNMFDataFrameVizExtension:
+    def __init__(self, df):
+        self._dataframe = df
+
+    def viz(
+            self,
+            data: List[str] = None,
+            start_index: int = 0,
+            reset_timepoint_on_change: bool = False,
+            data_graphic_kwargs: dict = None,
+            gridplot_kwargs: dict = None,
+            cmap: str = "gnuplot2",
+            component_colors: str = "random",
+            calcium_framerate: float = None,
+            other_data_loaders: Dict[str, callable] = None,
+            data_kwargs: dict = None,
+            data_grid_kwargs: dict = None,
+    ):
+        """
+        Visualize motion correction output.
+
+        Parameters
+        ----------
+        data: list of str or list of list of str
+            default [["temporal"], ["input", "rcm", "rcb", "residuals"]]
+            list of data to plot, valid options are:
+
+            +-------------+-------------------------------------+
+            | data option | description                         |
+            +=============+=====================================+
+            | input       | input movie                         |
+            | mcorr       | motion corrected movie              |
+            | mean        | mean projection                     |
+            | max         | max projection                      |
+            | std         | standard deviation projection       |
+            | corr        | correlation image, if computed      |
+            | pnr         | peak-noise-ratio image, if computed |
+            +-------------+-------------------------------------+
+
+        start_index: int, default 0
+            start index item used to set the initial data in the ImageWidget
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
+
+        input_movie_kwargs: dict, optional
+            kwargs passed to get_input_movie()
+
+        image_widget_kwargs: dict, optional
+            kwargs passed to ImageWidget
+
+        data_grid_kwargs: dict, optional
+            kwargs passed to DataGrid()
+
+        Returns
+        -------
+        McorrVizContainer
+            widget that contains the DataGrid, params text box and ImageWidget
+        """
+        container = CNMFVizContainer(
+            dataframe=self._dataframe,
+            data=data,
+            start_index=start_index,
+            reset_timepoint_on_change=reset_timepoint_on_change,
+            data_graphic_kwargs=data_graphic_kwargs,
+            gridplot_kwargs=gridplot_kwargs,
+            cmap=cmap,
+            component_colors=component_colors,
+            calcium_framerate=calcium_framerate,
+            other_data_loaders=other_data_loaders,
+            data_kwargs=data_kwargs,
+            data_grid_kwargs=data_grid_kwargs,
+        )
+
+        return container
