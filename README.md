@@ -34,9 +34,11 @@ Install voila:
 pip install voila
 ```
 
-Use as a voila app (as shown in the demo video)
+Use as a voila app (as shown in the demo video).
 
 ```bash
 cd mesmerize-viz
 voila examples/app.ipynb --enable_nbextensions=True
 ```
+
+Note that the voila app is a WIP prototype
