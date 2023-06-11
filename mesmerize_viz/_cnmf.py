@@ -135,6 +135,8 @@ def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_dat
 
     default_extension_kwargs = {k: dict() for k in VALID_DATA_OPTIONS + list(other_data_loaders.keys())}
 
+    default_extension_kwargs["contours"] = {"swap_dim": False}
+
     ext_kwargs = {
         **default_extension_kwargs,
         **data_kwargs
