@@ -1,1 +1,2 @@
-from .mcorrviewer import MCorrViewer
+from ._mcorr import MCorrExtensionsViz, MCorrDataFrameVizExtension
+from ._cnmf import CNMFDataFrameVizExtension
