@@ -16,22 +16,27 @@ from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
 from fastplotlib.utils import calculate_gridshape
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox, HBox, Layout, Checkbox
+from ipywidgets import Textarea, VBox, HBox, Layout, Checkbox, IntSlider, BoundedIntText, jslink
 
 from ._utils import ZeroArray, format_params
 
 
 # basic data options
 VALID_DATA_OPTIONS = [
-    "input",
     "contours",
+    "empty"
+]
+
+IMAGE_OPTIONS = [
+    "input",
     "rcm",
     "rcb",
     "residuals",
     "corr",
     "pnr",
-    "empty"
 ]
+
+VALID_DATA_OPTIONS += IMAGE_OPTIONS
 
 
 TEMPORAL_OPTIONS = [
@@ -50,6 +55,7 @@ for option in ["rcm", "rcb"]:
         rcm_rcb_proj_options.append(f"{option}-{proj}")
 
 VALID_DATA_OPTIONS += rcm_rcb_proj_options
+IMAGE_OPTIONS += rcm_rcb_proj_options
 
 
 projs = [
@@ -58,14 +64,7 @@ projs = [
     "std",
 ]
 
-
-image_widget_managed = [
-    "input",
-    "contours",
-    "rcm",
-    "rcb",
-    "residuals"
-]
+IMAGE_OPTIONS += projs
 
 VALID_DATA_OPTIONS += projs
 
@@ -368,6 +367,11 @@ class GridPlotWrapper:
 
         self.gridplots: List[GridPlot] = list()
 
+        self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
+        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1)
+        for trait in ["value", "max"]:
+            jslink((self.component_slider, trait), (self.component_int_box, trait))
+
         # gridplot for each sublist
         for sub_data in self._data:
             _gridplot_kwargs = {"shape": calculate_gridshape(len(sub_data))}
@@ -395,6 +399,12 @@ class GridPlotWrapper:
         self._current_frame_index: int = 0
 
         self.change_data(data_mapping)
+
+    def set_component_index(self, change):
+        index = change["new"]
+
+        for g in self.contour_graphics:
+            g._set_feature(feature="colors", new_data="w", indices=index)
 
     def _parse_data(self, data_options, data_mapping) -> List[List[np.ndarray]]:
         """
@@ -792,6 +802,7 @@ class CNMFVizContainer:
 
         widget = VBox(
             [
+                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
                 HBox([self.datagrid, self.params_text_area]),
                 self.show_all_checkbox,
                 VBox([gp.show() for gp in self.gridplots])
