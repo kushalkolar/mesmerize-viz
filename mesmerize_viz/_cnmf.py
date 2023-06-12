@@ -372,6 +372,8 @@ class GridPlotWrapper:
         for trait in ["value", "max"]:
             jslink((self.component_slider, trait), (self.component_int_box, trait))
 
+        self.component_int_box.observe(self.set_component_index, "value")
+
         # gridplot for each sublist
         for sub_data in self._data:
             _gridplot_kwargs = {"shape": calculate_gridshape(len(sub_data))}
@@ -467,6 +469,9 @@ class GridPlotWrapper:
             component_colors[:, -1] = 1
         else:
             component_colors = self.component_colors
+
+        self.component_slider.value = 0
+        self.component_slider.max = len(contours)
 
         # change data for all gridplots
         for sub_data, sub_data_arrays, gridplot in zip(self._data, data_arrays, self.gridplots):
@@ -578,6 +583,8 @@ class GridPlotWrapper:
         ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
 
         target._set_feature(feature="colors", new_data=new_data, indices=ix)
+
+        self.component_int_box.value = ix
 
         return None
 
@@ -802,9 +809,9 @@ class CNMFVizContainer:
 
         widget = VBox(
             [
-                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
                 HBox([self.datagrid, self.params_text_area]),
                 self.show_all_checkbox,
+                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
                 VBox([gp.show() for gp in self.gridplots])
             ]
         )
@@ -906,29 +913,36 @@ class CNMFDataFrameVizExtension:
             default [["temporal"], ["input", "rcm", "rcb", "residuals"]]
             list of data to plot, valid options are:
 
-            +-------------+-------------------------------------+
-            | data option | description                         |
-            +=============+=====================================+
-            | input       | input movie                         |
-            | mcorr       | motion corrected movie              |
-            | mean        | mean projection                     |
-            | max         | max projection                      |
-            | std         | standard deviation projection       |
-            | corr        | correlation image, if computed      |
-            | pnr         | peak-noise-ratio image, if computed |
-            +-------------+-------------------------------------+
+            +------------------+-----------------------------------------+
+            | "input"          | input movie                             |
+            +==================+=========================================+
+            | "rcm"            | reconstructed movie, A * C              |
+            | "rcb"            | reconstructed background, b * f         |
+            | "residuals"      | residuals, input - (A * C) - (b * f)    |
+            | "corr"           | correlation image, if computed          |
+            | "pnr"            | peak-noise-ratio image, if computed     |
+            | "temporal"       | temporal components overlaid            |
+            | "temporal-stack" | temporal components stack               |
+            | "heatmap"        | temporal components heatmap             |
+            | "rcm-mean"       | rcm mean projection image               |
+            | "rcm-min"        | rcm min projection image                |
+            | "rcm-max"        | rcm max projection image                |
+            | "rcm-std"        | rcm standard deviation projection image |
+            | "rcb-mean"       | rcb mean projection image               |
+            | "rcb-min"        | rcb min projection image                |
+            | "rcb-max"        | rcb max projection image                |
+            | "rcb-std"        | rcb standard deviation projection image |
+            | "mean"           | mean projection image                   |
+            | "max"            | max projection image                    |
+            | "std"            | standard deviation projection image     |
+            +------------------+-----------------------------------------+
+
 
         start_index: int, default 0
             start index item used to set the initial data in the ImageWidget
 
         reset_timepoint_on_change: bool, default False
             reset the timepoint in the ImageWidget when changing items/rows
-
-        input_movie_kwargs: dict, optional
-            kwargs passed to get_input_movie()
-
-        image_widget_kwargs: dict, optional
-            kwargs passed to ImageWidget
 
         data_grid_kwargs: dict, optional
             kwargs passed to DataGrid()
