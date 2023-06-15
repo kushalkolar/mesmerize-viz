@@ -526,7 +526,6 @@ class GridPlotWrapper:
             elif data_option == "heatmap":
                 current_graphic = subplot.add_heatmap(
                     data_array,
-                    colors=component_colors,
                     name="components",
                     **graphic_kwargs
                 )
@@ -558,9 +557,7 @@ class GridPlotWrapper:
                 subplot.camera.maintain_aspect = False
 
         if len(self.linear_selectors) > 0:
-            self._synchronizer = Synchronizer(
-                *self.linear_selectors, key_bind=None
-            )
+            self._synchronizer = Synchronizer(*self.linear_selectors)
 
         for ls in self.linear_selectors:
             ls.selection.add_event_handler(self.set_frame_index)
