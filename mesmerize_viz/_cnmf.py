@@ -3,6 +3,7 @@ from functools import partial
 import math
 import itertools
 from warnings import warn
+from itertools import product
 
 import ipywidgets
 import numpy as np
@@ -514,6 +515,9 @@ class GridPlotWrapper:
                 # otherwise the plot has nothing in it which causes issues
                 subplot.add_line(np.random.rand(data_array.shape[1]), colors=(0, 0, 0, 0), name="pseudo-line")
 
+                # scale according to temporal dims
+                subplot.camera.maintain_aspect = False
+
             elif data_option == "temporal-stack":
                 current_graphic = subplot.add_line_stack(
                     data_array,
@@ -523,6 +527,9 @@ class GridPlotWrapper:
                 )
                 self.temporal_stack_graphics.append(current_graphic)
 
+                # scale according to temporal dims
+                subplot.camera.maintain_aspect = False
+
             elif data_option == "heatmap":
                 current_graphic = subplot.add_heatmap(
                     data_array,
@@ -530,6 +537,9 @@ class GridPlotWrapper:
                     **graphic_kwargs
                 )
                 self.heatmap_graphics.append(current_graphic)
+
+                # scale according to temporal dims
+                subplot.camera.maintain_aspect = False
 
             else:
                 img_graphic = subplot.add_image(
@@ -599,6 +609,9 @@ class GridPlotWrapper:
 
             for temporal_graphic in self.temporal_graphics:
                 contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
+
+            for cg, tsg in product(self.contour_graphics, self.temporal_stack_graphics):
+                cg.link("colors", target=contour_graphic, feature="colors", new_data="w", bidirectional=True)
 
     def set_frame_index(self, ev):
         # 0 because this will return the same number repeated * n_components
@@ -804,12 +817,19 @@ class CNMFVizContainer:
 
         self.show_all_checkbox = Checkbox(value=True, description="Show all components")
 
+        gridplots_widget = [gp.show() for gp in self.gridplots]
+
+        if "Jupyter" in self.gridplots[0].canvas.__class__.__name__:
+            vbox_elements = gridplots_widget
+        else:
+            vbox_elements = list()
+
         widget = VBox(
             [
                 HBox([self.datagrid, self.params_text_area]),
                 self.show_all_checkbox,
                 HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
-                VBox([gp.show() for gp in self.gridplots])
+                VBox(vbox_elements)
             ]
         )
 
