@@ -8,7 +8,7 @@ import pandas as pd
 from ipywidgets import IntSlider, BoundedIntText, jslink
 
 from fastplotlib import GridPlot, graphics
-from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
+from fastplotlib.graphics.selectors import LinearSelector, Synchronizer, LinearRegionSelector
 from fastplotlib.utils import calculate_gridshape
 
 
@@ -227,7 +227,9 @@ class GridPlotWrapper:
         for trait in ["value", "max"]:
             jslink((self.component_slider, trait), (self.component_int_box, trait))
 
-        self.component_int_box.observe(self.set_component_index, "value")
+        self.component_int_box.observe(
+            lambda change: self.set_component_index(change["new"]), "value"
+        )
 
         # gridplot for each sublist
         for sub_data in self._data:
@@ -235,11 +237,13 @@ class GridPlotWrapper:
             _gridplot_kwargs.update(gridplot_kwargs)
             self.gridplots.append(GridPlot(**_gridplot_kwargs))
 
-        self.temporal_graphics: List[graphics.LineCollection] = list()
+        self.temporal_graphics: List[graphics.LineGraphic] = list()
         self.temporal_stack_graphics: List[graphics.LineStack] = list()
         self.heatmap_graphics: List[graphics.HeatmapGraphic] = list()
         self.image_graphics: List[graphics.ImageGraphic] = list()
         self.contour_graphics: List[graphics.LineCollection] = list()
+
+        self.heatmap_selectors: List[LinearSelector] = list()
 
         self._managed_graphics: List[list] = [
             self.temporal_graphics,
@@ -255,13 +259,29 @@ class GridPlotWrapper:
 
         self._current_frame_index: int = 0
 
+        self._current_temporal_components: np.ndarray = None
+
         self.change_data(data_mapping)
 
-    def set_component_index(self, change):
-        index = change["new"]
-
+    def set_component_index(self, index: int):
+        # TODO: more elegant way than skip_heatmap
         for g in self.contour_graphics:
             g._set_feature(feature="colors", new_data="w", indices=index)
+
+        for g in self.temporal_graphics:
+            g.data = self._current_temporal_components[index]
+
+        for s in self.heatmap_selectors:
+            # TODO: Very hacky for now, ignores if the slider is currently being moved, prevents weird slider movement
+            if s._move_info is None:
+                s.selection = index
+
+        self.component_int_box.value = index
+
+    def _heatmap_set_component_index(self, ev):
+        index = ev.pick_info["selected_index"]
+
+        self.set_component_index(index)
 
     def _parse_data(self, data_options, data_mapping) -> List[List[np.ndarray]]:
         """
@@ -303,10 +323,29 @@ class GridPlotWrapper:
     #
 
     def change_data(self, data_mapping: Dict[str, callable]):
+        """
+        Changes the data shown in the gridplot.
+
+        Clears all the gridplots, makes and adds new graphics
+
+        Parameters
+        ----------
+        data_mapping
+
+        Returns
+        -------
+
+        """
         for l in self._managed_graphics:
             l.clear()
 
+        self.heatmap_selectors.clear()
+        self.linear_selectors.clear()
+
         self.image_graphic_arrays.clear()
+
+        # clear out old array that stores temporal components
+        self._current_temporal_components = None
 
         # clear existing subplots
         for gp in self.gridplots:
@@ -326,7 +365,7 @@ class GridPlotWrapper:
             component_colors = self.component_colors
 
         self.component_slider.value = 0
-        self.component_slider.max = len(contours)
+        self.component_slider.max = len(contours) - 1
 
         # change data for all gridplots
         for sub_data, sub_data_arrays, gridplot in zip(self._data, data_arrays, self.gridplots):
@@ -334,6 +373,16 @@ class GridPlotWrapper:
 
         # connect events
         self._connect_events()
+
+        # sync sliders if multiple are present
+        if len(self.linear_selectors) > 0:
+            self._synchronizer = Synchronizer(*self.linear_selectors, key_bind=None)
+
+        for ls in self.linear_selectors:
+            ls.selection.add_event_handler(self.set_frame_index)
+
+        for hs in self.heatmap_selectors:
+            hs.selection.add_event_handler(self._heatmap_set_component_index)
 
     def _change_data_gridplot(
             self,
@@ -343,6 +392,23 @@ class GridPlotWrapper:
             contours,
             component_colors
     ):
+        """
+        Changes data in a single gridplot.
+
+        Create the corresponding graphics.
+
+        Parameters
+        ----------
+        data
+        data_arrays
+        gridplot
+        contours
+        component_colors
+
+        Returns
+        -------
+
+        """
 
         if self.reset_timepoint_on_change:
             self._current_frame_index = 0
@@ -357,17 +423,22 @@ class GridPlotWrapper:
                 continue
 
             elif data_option == "temporal":
-                current_graphic = subplot.add_line_collection(
-                    data_array,
-                    colors=component_colors,
-                    name="components",
+                # Only few one line at a time
+                current_graphic = subplot.add_line(
+                    data_array[0],
+                    colors="w",
+                    name="line",
                     **graphic_kwargs
                 )
-                current_graphic[:].present.add_event_handler(subplot.auto_scale)
+
+                current_graphic.data.add_event_handler(subplot.auto_scale)
                 self.temporal_graphics.append(current_graphic)
 
+                if self._current_temporal_components is None:
+                    self._current_temporal_components = data_array
+
                 # otherwise the plot has nothing in it which causes issues
-                subplot.add_line(np.random.rand(data_array.shape[1]), colors=(0, 0, 0, 0), name="pseudo-line")
+                # subplot.add_line(np.random.rand(data_array.shape[1]), colors=(0, 0, 0, 0), name="pseudo-line")
 
                 # scale according to temporal dims
                 subplot.camera.maintain_aspect = False
@@ -376,7 +447,7 @@ class GridPlotWrapper:
                 current_graphic = subplot.add_line_stack(
                     data_array,
                     colors=component_colors,
-                    name="components",
+                    name="lines",
                     **graphic_kwargs
                 )
                 self.temporal_stack_graphics.append(current_graphic)
@@ -387,7 +458,7 @@ class GridPlotWrapper:
             elif data_option == "heatmap":
                 current_graphic = subplot.add_heatmap(
                     data_array,
-                    name="components",
+                    name="heatmap",
                     **graphic_kwargs
                 )
                 self.heatmap_graphics.append(current_graphic)
@@ -395,9 +466,22 @@ class GridPlotWrapper:
                 # scale according to temporal dims
                 subplot.camera.maintain_aspect = False
 
+                selector = current_graphic.add_linear_selector(
+                    axis="y",
+                    color=(1, 1, 1, 0.5),
+                    thickness=5,
+                )
+
+                self.heatmap_selectors.append(selector)
+
             else:
+                # else it is an image
+                if data_array.ndim == 3:
+                    frame = data_array[self._current_frame_index]
+                else:
+                    frame = data_array
                 img_graphic = subplot.add_image(
-                    data_array[self._current_frame_index],
+                    frame,
                     cmap=self.cmap,
                     name="image",
                     **graphic_kwargs
@@ -420,12 +504,6 @@ class GridPlotWrapper:
                 self.linear_selectors.append(current_graphic.add_linear_selector())
                 subplot.camera.maintain_aspect = False
 
-        if len(self.linear_selectors) > 0:
-            self._synchronizer = Synchronizer(*self.linear_selectors)
-
-        for ls in self.linear_selectors:
-            ls.selection.add_event_handler(self.set_frame_index)
-
     def _euclidean(self, source, target, event, new_data):
         """maps click events to contour"""
         # calculate coms of line collection
@@ -443,7 +521,7 @@ class GridPlotWrapper:
 
         ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
 
-        target._set_feature(feature="colors", new_data=new_data, indices=ix)
+        self.set_component_index(ix)
 
         self.component_int_box.value = ix
 
@@ -461,15 +539,15 @@ class GridPlotWrapper:
 
             contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=5)
 
-            for temporal_graphic in self.temporal_graphics:
-                contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
+            # for temporal_graphic in self.temporal_graphics:
+            #     contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
 
             for cg, tsg in product(self.contour_graphics, self.temporal_stack_graphics):
                 cg.link("colors", target=contour_graphic, feature="colors", new_data="w", bidirectional=True)
 
     def set_frame_index(self, ev):
         # 0 because this will return the same number repeated * n_components
-        index = ev.pick_info["selected_index"][0]
+        index = ev.pick_info["selected_index"]
         for image_graphic, full_array in zip(self.image_graphics, self.image_graphic_arrays):
             # txy data
             if full_array.ndim > 2:

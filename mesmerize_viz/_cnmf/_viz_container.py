@@ -4,7 +4,7 @@ from typing import *
 
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, Layout, Checkbox, VBox, HBox
+from ipywidgets import Textarea, Layout, VBox, HBox
 
 from ._wrapper import VALID_DATA_OPTIONS, get_cnmf_data_mapping, GridPlotWrapper
 from .._utils import format_params
@@ -200,8 +200,6 @@ class CNMFVizContainer:
     def show(self):
         """Show the widget"""
 
-        self.show_all_checkbox = Checkbox(value=True, description="Show all components")
-
         gridplots_widget = [gp.show() for gp in self.gridplots]
 
         if "Jupyter" in self.gridplots[0].canvas.__class__.__name__:
@@ -211,20 +209,12 @@ class CNMFVizContainer:
 
         widget = VBox(
             [
-                HBox([self.datagrid, self.params_text_area]),
-                self.show_all_checkbox,
-                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
+                HBox([self.datagrid, self.params_text_area]), HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
                 VBox(vbox_elements)
             ]
         )
 
-        self.show_all_checkbox.observe(self._toggle_show_all, "value")
-
         return widget
-
-    def _toggle_show_all(self, change):
-        for line_collection in self._gridplot_wrapper.temporal_graphics:
-            line_collection[:].present = change["new"]
 
     def close(self):
         """Close the widget"""
