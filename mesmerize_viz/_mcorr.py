@@ -10,7 +10,7 @@ from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
 
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox, HBox, Layout
+from ipywidgets import Textarea, VBox, HBox, Layout, IntSlider, Checkbox
 
 from ._utils import validate_data_options, ZeroArray, format_params
 from ._common import ImageWidgetWrapper
@@ -184,6 +184,14 @@ class McorrVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+    def _set_mean_window_size(self, change):
+        self.image_widget.window_funcs = {"t": (np.mean, change["new"])}
+        self.image_widget.current_index = self.image_widget.current_index
+
+    def _set_mean_diff(self, change):
+        # TODO: will do later
+        pass
+
     def _make_image_widget(self, index):
         self._image_widget_wrapper = ImageWidgetWrapper(
             data=self._data,
@@ -195,6 +203,22 @@ class McorrVizContainer:
         )
 
         self.image_widget = self._image_widget_wrapper.image_widget
+
+        # mean window slider
+        self._slider_mean_window = IntSlider(
+            min=1,
+            step=2,
+            max=99,
+            value=33,
+            description="mean wind",
+            description_tooltip="set a mean rolling window"
+        )
+        self._slider_mean_window.observe(self._set_mean_window_size, "value")
+
+        # TODO: mean diff checkbox
+        #self._checkbox_mean_diff
+
+        self.image_widget.window_funcs = {"t": (np.mean, self._slider_mean_window.value)}
 
     def _get_selection_row(self) -> Union[int, None]:
         r1 = self.datagrid.selections[0]["r1"]
@@ -262,7 +286,8 @@ class McorrVizContainer:
 
         return VBox([
             HBox([self.datagrid, self.params_text_area]),
-            self.image_widget.show()
+            self.image_widget.show(),
+            self._slider_mean_window
         ])
 
 
