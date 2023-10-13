@@ -5,6 +5,8 @@ from typing import *
 import pandas as pd
 from ipydatagrid import DataGrid
 from ipywidgets import Textarea, Layout, VBox, HBox
+from IPython.display import display
+from sidecar import Sidecar
 
 from ._wrapper import VALID_DATA_OPTIONS, get_cnmf_data_mapping, GridPlotWrapper
 from .._utils import format_params
@@ -169,6 +171,8 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+        self.sidecar = None
+
     def _make_gridplot(
             self,
             start_index: int,
@@ -197,15 +201,19 @@ class CNMFVizContainer:
 
         self.gridplots = self._gridplot_wrapper.gridplots
 
-    def show(self):
+    def show(self, sidecar: bool = True):
         """Show the widget"""
 
-        gridplots_widget = [gp.show() for gp in self.gridplots]
+        # create gridplots and start render loop
+        gridplots_widget = [gp.show(sidecar=False) for gp in self.gridplots]
 
         if "Jupyter" in self.gridplots[0].canvas.__class__.__name__:
             vbox_elements = gridplots_widget
         else:
             vbox_elements = list()
+
+        if self.sidecar is None:
+            self.sidecar = Sidecar()
 
         widget = VBox(
             [
@@ -214,7 +222,8 @@ class CNMFVizContainer:
             ]
         )
 
-        return widget
+        with self.sidecar:
+            return display(widget)
 
     def close(self):
         """Close the widget"""

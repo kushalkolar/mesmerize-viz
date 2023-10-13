@@ -266,7 +266,7 @@ class GridPlotWrapper:
     def set_component_index(self, index: int):
         # TODO: more elegant way than skip_heatmap
         for g in self.contour_graphics:
-            g._set_feature(feature="colors", new_data="w", indices=index)
+            g.set_feature(feature="colors", new_data="w", indices=index)
 
         for g in self.temporal_graphics:
             g.data = self._current_temporal_components[index]
