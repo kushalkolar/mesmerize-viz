@@ -19,24 +19,23 @@ def validate_data_options():
     def dec(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            if "data" in kwargs:
-                data = kwargs["data"]
+            if "data_options" in kwargs:
+                data_options = kwargs["data_options"]
             else:
                 if len(args) > 0:
-                    data = args[0]
+                    data_options = args[0]
                 else:
                     # assume the extension func will take care of it
                     # the default data arg is None is nothing is passed
                     return func(self, *args, **kwargs)
 
-
             # flatten
-            if any([isinstance(d, (list, tuple)) for d in data]):
-                data = list(chain.from_iterable(data))
+            if any([isinstance(d, (list, tuple)) for d in data_options]):
+                data_options = list(chain.from_iterable(data_options))
 
             valid_options = list(self._data_mapping.keys())
 
-            for d in data:
+            for d in data_options:
                 if d not in valid_options:
                     raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
                                    f"\n{valid_options}")
@@ -47,37 +46,50 @@ def validate_data_options():
     return dec
 
 
-class ZeroArray(LazyArray):
-    """
-    This array is used as placeholders to allow mixing data of different ndims in the ImageWidget.
-    For example this allows having mean, max etc. projections in the same ImageWidget as the
-    input or mcorr movie. It also allows having LineStacks or Heatmap in the same ImageWidget.
-    """
-    def __init__(self, ndim):
-        self._shape = [1] * ndim
-        self.rval = np.zeros(shape=self.shape, dtype=np.int8)
-        # hack to allow it to work with any other array sizes
-        self._shape[0] = np.inf
+class DummyMovie:
+    """Really really hacky"""
+    def __init__(self, image: np.ndarray, shape, ndim, size):
+        self.image = image
+        self.shape = shape
+        self.ndim = ndim
+        self.size = size
 
-    @property
-    def dtype(self) -> str:
-        return "int8"
+    def __getitem__(self, index: Union[int, slice]):
+        if isinstance(index, tuple):
+            for s in index:
+                if isinstance(s, int):
+                    # assumption
+                    index = s
+                    break
 
-    @property
-    def shape(self) -> Tuple[int, int, int]:
-        return tuple(self._shape)
+                if (s.start is None) and (s.stop is None) and (s.step is None):
+                    continue
+                else:
+                    # assume that this is the dimension that user has asked for, and we return the image using
+                    # slice size from this dimension
+                    index = s
 
-    @property
-    def n_frames(self) -> int:
-        return np.inf
+        if isinstance(index, (slice, range)):
+            start, stop, step = index.start, index.stop, index.step
 
-    @property
-    def min(self) -> float:
-        return 0.0
+            if start is None:
+                start = 0
 
-    @property
-    def max(self) -> float:
-        return 0.0
+            if stop is None:
+                # assumption, again this is very hacky
+                stop = max(self.shape)
 
-    def _compute_at_indices(self, indices: Union[int, slice]) -> np.ndarray:
-        return self.rval
+            if step is None:
+                step = 1
+
+            r = range(start, stop, step)
+
+            n_frames = len(r)
+
+            return np.array([self.image] * n_frames)
+
+        if isinstance(index, int):
+            return self.image
+
+        else:
+            raise TypeError(f"DummyMovie only accept int or slice indexing, you have passed: {index}")

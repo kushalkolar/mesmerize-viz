@@ -1,4 +1,3 @@
-from collections import OrderedDict
 from typing import *
 from functools import partial
 from warnings import warn
@@ -6,18 +5,14 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 from mesmerize_core import MCorrExtensions
-from mesmerize_core.caiman_extensions._utils import validate as validate_algo
 from fastplotlib import ImageWidget
+from sidecar import Sidecar
+from IPython.display import display
 
 from ipydatagrid import DataGrid
 from ipywidgets import Textarea, VBox, HBox, Layout, IntSlider, Checkbox
 
-from ._utils import validate_data_options, ZeroArray, format_params
-from ._common import ImageWidgetWrapper
-
-
-# these are directly manged by the image widget since they are [t, x, y]
-image_widget_managed = ["input", "mcorr"]
+from ._utils import DummyMovie, format_params
 
 
 projs = [
@@ -25,6 +20,13 @@ projs = [
     "max",
     "std",
 ]
+
+VALID_DATA_OPTIONS = (
+    "input",
+    "mcorr",
+    "corr",
+    *projs,
+)
 
 
 def get_mcorr_data_mapping(series: pd.Series) -> dict:
@@ -60,7 +62,7 @@ class McorrVizContainer:
     def __init__(
         self,
             dataframe: pd.DataFrame,
-            data: List[str] = None,
+            data_options: List[str] = None,
             start_index: int = 0,
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs: dict = None,
@@ -72,7 +74,7 @@ class McorrVizContainer:
 
         Parameters
         ----------
-        data: list of str, default ["input", "mcorr", "mean", "corr"]
+        data_options: list of str, default ["input", "mcorr", "mean", "corr"]
             list of data to plot, valid options are:
 
             +-------------+-------------------------------------+
@@ -102,9 +104,9 @@ class McorrVizContainer:
         data_grid_kwargs: dict, optional
             kwargs passed to DataGrid()
         """
-        if data is None:
+        if data_options is None:
             # default viz
-            data = ["input", "mcorr", "mean", "corr"]
+            data_options = ["input", "mcorr", "mean", "corr"]
 
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()
@@ -151,7 +153,7 @@ class McorrVizContainer:
         )
 
         # data options is private since this can't be changed once an image widget has been made
-        self._data = data
+        self._data_options = data_options
 
         if input_movie_kwargs is None:
             input_movie_kwargs = dict()
@@ -159,17 +161,26 @@ class McorrVizContainer:
         if image_widget_kwargs is None:
             image_widget_kwargs = dict()
 
+        # default kwargs unless user has specified more
+        default_iw_kwargs = {
+            "window_funcs": {"t": (np.mean, 11)},
+            "vmin_vmax_sliders": True,
+            "cmap": "gnuplot2"
+        }
+
+        image_widget_kwargs = {
+            **default_iw_kwargs,
+            **image_widget_kwargs  # anything in default gets replaced with user-specified entries if present
+        }
+
         self.input_movie_kwargs = input_movie_kwargs
         self.image_widget_kwargs = image_widget_kwargs
 
-        self._reset_timepoint_on_change = reset_timepoint_on_change
+        self.reset_timepoint_on_change = reset_timepoint_on_change
         self.image_widget: ImageWidget = None
-        self._image_widget_wrapper: ImageWidgetWrapper = None
 
         self.current_row: int = start_index
 
-        # set the initial widget state with the start index
-        self._make_image_widget(index=start_index)
         self._set_params_text_area(index=start_index)
 
         # set initial selected row
@@ -184,43 +195,73 @@ class McorrVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+        # set the initial widget state with the start index
+        data_arrays = self._get_row_data(index=start_index)
+
+        self.image_widget = ImageWidget(
+            data=data_arrays,
+            names=self._data_options,
+            **self.image_widget_kwargs
+        )
+
+        # mean window slider
+        self.slider_mean_window = IntSlider(
+            min=1,
+            step=2,
+            max=99,
+            value=self.image_widget.window_funcs["t"].window_size,  # set from the image widget
+            description="mean wind",
+            description_tooltip="set a mean rolling window"
+        )
+        self.slider_mean_window.observe(self._set_mean_window_size, "value")
+
+        # TODO: mean diff checkbox
+        # self._checkbox_mean_diff
+
+        self.sidecar = None
+
     def _set_mean_window_size(self, change):
         self.image_widget.window_funcs = {"t": (np.mean, change["new"])}
+
+        # set same index, forces ImageWidget to run process_indices() so the image shown updates using the new window
         self.image_widget.current_index = self.image_widget.current_index
 
     def _set_mean_diff(self, change):
         # TODO: will do later
         pass
 
-    def _make_image_widget(self, index):
-        self._image_widget_wrapper = ImageWidgetWrapper(
-            data=self._data,
-            data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-            image_widget_managed_data=image_widget_managed,
-            reset_timepoint_on_change=self._reset_timepoint_on_change,
-            input_movie_kwargs=self.input_movie_kwargs,
-            image_widget_kwargs=self.image_widget_kwargs
-        )
+    def _get_row_data(self, index: int) -> List[np.ndarray]:
+        data_arrays: List[np.ndarray] = list()
 
-        self.image_widget = self._image_widget_wrapper.image_widget
+        data_mapping = get_mcorr_data_mapping(self._dataframe.iloc[index])
 
-        # mean window slider
-        self._slider_mean_window = IntSlider(
-            min=1,
-            step=2,
-            max=99,
-            value=33,
-            description="mean wind",
-            description_tooltip="set a mean rolling window"
-        )
-        self._slider_mean_window.observe(self._set_mean_window_size, "value")
+        mcorr = data_mapping["mcorr"]()
 
-        # TODO: mean diff checkbox
-        #self._checkbox_mean_diff
+        shape = mcorr.shape
+        ndim = mcorr.ndim
+        size = mcorr.size
 
-        self.image_widget.window_funcs = {"t": (np.mean, self._slider_mean_window.value)}
+        # go through all data options user has chosen
+        for option in self._data_options:
+            func = data_mapping[option]
 
-    def _get_selection_row(self) -> Union[int, None]:
+            if option == "input":
+                # kwargs, such as using a specific input movie loader
+                array = func(**self.input_movie_kwargs)
+
+            else:
+                # just fetch the array
+                array = func()
+
+            # for 2D images
+            if array.ndim == 2:
+                array = DummyMovie(array, shape=shape, ndim=ndim, size=size)
+
+            data_arrays.append(array)
+
+        return data_arrays
+
+    def _get_selected_row(self) -> Union[int, None]:
         r1 = self.datagrid.selections[0]["r1"]
         r2 = self.datagrid.selections[0]["r2"]
 
@@ -235,32 +276,32 @@ class McorrVizContainer:
         return index
 
     def _row_changed(self, *args):
-        index = self._get_selection_row()
+        index = self._get_selected_row()
         if index is None:
             return
 
         if self.current_row == index:
             return
 
-        if self.image_widget is None:
-            self._make_image_widget(index)
-            return
-
         try:
-            self._image_widget_wrapper.change_data(
-                data=self._data,
-                data_mapping=get_mcorr_data_mapping(self._dataframe.iloc[index]),
-                input_movie_kwargs=self.input_movie_kwargs
-            )
+            # fetch the data for this row
+            data_arrays = self._get_row_data(index)
+
         except Exception as e:
             self.params_text_area.value = f"{type(e).__name__}\n" \
                                           f"{str(e)}\n\n" \
                                           f"See jupyter log for details"
             raise e
 
-        self._set_params_text_area(index)
-
-        self.current_row = index
+        else:
+            # no exceptions, set ImageWidget
+            self.image_widget.set_data(
+                new_data=data_arrays,
+                reset_vmin_vmax=False,
+                reset_indices=self.reset_timepoint_on_change
+            )
+            self._set_params_text_area(index)
+            self.current_row = index
 
     def _set_params_text_area(self, index):
         row = self._dataframe.iloc[index]
@@ -269,9 +310,9 @@ class McorrVizContainer:
             param_diffs = self._dataframe.caiman.get_params_diffs(
                 algo=row["algo"],
                 item_name=row["item_name"]
-            ).iloc[index]
+            ).loc[index]
 
-            diffs_dict = {"diffs": param_diffs}
+            diffs_dict = {"diffs": param_diffs.to_dict()}
             diffs = f"{format_params(diffs_dict, 0)}\n\n"
         except:
             diffs = ""
@@ -284,11 +325,17 @@ class McorrVizContainer:
         Show the widget
         """
 
-        return VBox([
-            HBox([self.datagrid, self.params_text_area]),
-            self.image_widget.show(),
-            self._slider_mean_window
-        ])
+        if self.sidecar is None:
+            self.sidecar = Sidecar()
+
+        self.image_widget.reset_vmin_vmax()
+
+        with self.sidecar:
+            return display(VBox([
+                HBox([self.datagrid, self.params_text_area]),
+                self.image_widget.show(sidecar=False),
+                self.slider_mean_window
+            ]))
 
 
 @pd.api.extensions.register_dataframe_accessor("mcorr")
@@ -298,7 +345,7 @@ class MCorrDataFrameVizExtension:
 
     def viz(
             self,
-            data: List[str] = None,
+            data_options: List[str] = None,
             start_index: int = 0,
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs=None,
@@ -310,8 +357,8 @@ class MCorrDataFrameVizExtension:
 
         Parameters
         ----------
-        data: list of str, default ["input", "mcorr", "mean", "corr"]
-            list of data to plot, valid options are:
+        data_options: list of str, default ["input", "mcorr", "mean", "corr"]
+            list of data options to plot, valid options are:
 
             +-------------+-------------------------------------+
             | data option | description                         |
@@ -345,9 +392,15 @@ class MCorrDataFrameVizExtension:
         McorrVizContainer
             widget that contains the DataGrid, params text box and ImageWidget
         """
+
+        for d in data_options:
+            if d not in VALID_DATA_OPTIONS:
+                raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
+                               f"\n{VALID_DATA_OPTIONS}")
+
         container = McorrVizContainer(
             dataframe=self._dataframe,
-            data=data,
+            data_options=data_options,
             start_index=start_index,
             reset_timepoint_on_change=reset_timepoint_on_change,
             input_movie_kwargs=input_movie_kwargs,
@@ -356,111 +409,3 @@ class MCorrDataFrameVizExtension:
         )
 
         return container
-
-
-@pd.api.extensions.register_series_accessor("mcorr")
-class MCorrExtensionsViz(MCorrExtensions):
-    @property
-    def _data_mapping(self) -> Dict[str, callable]:
-        projections = {k: partial(self._series.caiman.get_projection, k) for k in projs}
-        m = {
-            "input": self._series.caiman.get_input_movie,
-            "mcorr": self.get_output,
-            "corr": self._series.caiman.get_corr_image,
-            **projections
-        }
-        return m
-
-    @property
-    def _zero_array(self):
-        mcorr = self.get_output()
-        return ZeroArray(ndim=mcorr.ndim, n_frames=mcorr.shape[0])
-
-    @validate_algo("mcorr")
-    @validate_data_options()
-    def viz(
-            self,
-            data: List[str] = None,
-            input_movie_kwargs: dict = None,
-            image_widget_kwargs: dict = None,
-    ):
-        """
-        Visualize motion correction output.
-
-        Parameters
-        ----------
-        data: list of str, default ["input", "mcorr"]
-            list of data to plot, can also be a list of lists.
-
-        input_movie_kwargs: dict, optional
-            kwargs passed to get_input_movie()
-
-        image_widget_kwargs: dict, optional
-            kwargs passed to ImageWidget
-
-        Returns
-        -------
-        ImageWidget
-            fastplotlib.ImageWidget visualization
-        """
-
-        if data is None:
-            # default viz
-            data = ["input", "mcorr"]
-
-        if input_movie_kwargs is None:
-            input_movie_kwargs = dict()
-
-        if image_widget_kwargs is None:
-            image_widget_kwargs = dict()
-
-        # data arrays directly passed to image widget
-        data_arrays_iw = list()
-
-        for d in data:
-            if d in image_widget_managed:
-                func = self._data_mapping[d]
-
-                if d == "input":
-                    a = func(**input_movie_kwargs)
-                else:
-                    a = func()
-
-                data_arrays_iw.append(a)
-
-            else:
-                # make a placeholder array to keep imagewidget happy
-                # hacky but this is the best way for now
-                zero_array = self._zero_array
-                data_arrays_iw.append(zero_array)
-
-        # default kwargs unless user has specified
-        default_iw_kwargs = {
-            "window_funcs": {"t": (np.mean, 11)},
-            "vmin_vmax_sliders": True,
-            "cmap": "gnuplot2"
-        }
-
-        image_widget_kwargs = {
-            **default_iw_kwargs,
-            **image_widget_kwargs
-        }
-
-        iw = ImageWidget(
-            data=data_arrays_iw,
-            names=data,
-            **image_widget_kwargs
-        )
-
-        for a, n in zip(data_arrays_iw, data):
-            if isinstance(a, ZeroArray):
-                # rename the existing graphic
-                iw.plot[n].graphics[0].name = "zero-array-ignore"
-                # get the real data
-                func = self._data_mapping[n]
-                real_data = func()
-                # create graphic with the real data, this will not be managed by ImageWidget
-                iw.plot[n].add_image(real_data, name="img", cmap="gnuplot2")
-
-        iw.show()
-        return iw
