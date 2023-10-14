@@ -2,8 +2,7 @@ from itertools import product
 from typing import Union, List, Dict
 
 import numpy as np
-
-from ipywidgets import IntSlider, BoundedIntText, jslink, Checkbox, FloatSlider
+from ipywidgets import IntSlider, BoundedIntText, jslink, Checkbox, FloatSlider, RadioButtons
 
 from fastplotlib import GridPlot, graphics
 from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
@@ -40,6 +39,20 @@ TEMPORAL_OPTIONS = [
     "heatmap",
 ]
 
+TEMPORAL_OPTIONS_DFOF = [
+    f"{option}-dfof" for option in TEMPORAL_OPTIONS
+]
+
+TEMPORAL_OPTIONS_ZSCORE = [
+    f"{option}-zscore" for option in TEMPORAL_OPTIONS
+]
+
+TEMPORAL_OPTIONS_NORM = [
+    f"{option}-norm" for option in TEMPORAL_OPTIONS
+]
+
+TEMPORAL_OPTIONS_ALL = TEMPORAL_OPTIONS + TEMPORAL_OPTIONS_DFOF + TEMPORAL_OPTIONS_ZSCORE + TEMPORAL_OPTIONS_ZSCORE + TEMPORAL_OPTIONS_NORM
+
 projs = [
     "mean",
     "max",
@@ -49,11 +62,17 @@ projs = [
 IMAGE_OPTIONS += projs
 
 VALID_DATA_OPTIONS += IMAGE_OPTIONS
-VALID_DATA_OPTIONS += TEMPORAL_OPTIONS
+VALID_DATA_OPTIONS += TEMPORAL_OPTIONS_ALL
 
 
 class ExtensionCallWrapper:
-    def __init__(self, extension_func: callable, kwargs: dict = None, attr: str = None):
+    def __init__(
+            self,
+            extension_func: callable,
+            kwargs: dict = None,
+            attr: str = None,
+            post_process_func: callable = None,
+    ):
         """
         Basically like ``functools.partial`` but supports kwargs.
 
@@ -65,9 +84,12 @@ class ExtensionCallWrapper:
         kwargs: dict
             kwargs to pass to the extension function when it is called
 
-        attr: str, optional
+        attr: str, optionalself, extension_func: callable, kwargs: dict = None, attr: str = None
             return an attribute of the callable's output instead of the return value of the callable.
             Example: if using rcm, can set ``attr="max_image"`` to return the max proj of the RCM.
+
+        post_process_func: callable
+            A function to postprocess before returning, such as zscore, etc.
         """
 
         if kwargs is None:
@@ -77,12 +99,16 @@ class ExtensionCallWrapper:
 
         self.func = extension_func
         self.attr = attr
+        self.post_process_func = post_process_func
 
     def __call__(self, *args, **kwargs):
         rval = self.func(**self.kwargs)
 
         if self.attr is not None:
             return getattr(rval, self.attr)
+
+        if self.post_process_func is not None:
+            return self.post_process_func(rval)
 
         return rval
 
@@ -374,7 +400,7 @@ class GridPlotWrapper:
             if data_option == "empty":
                 continue
 
-            elif data_option == "temporal":
+            elif data_option.startswith("temporal") and "stack" not in data_option:
                 # Only few one line at a time
                 current_graphic = subplot.add_line(
                     data_array[0],
@@ -395,7 +421,7 @@ class GridPlotWrapper:
                 # scale according to temporal dims
                 subplot.camera.maintain_aspect = False
 
-            elif data_option == "temporal-stack":
+            elif data_option.startswith("temporal-stack"):
                 current_graphic = subplot.add_line_stack(
                     data_array,
                     colors=component_colors,
@@ -407,7 +433,7 @@ class GridPlotWrapper:
                 # scale according to temporal dims
                 subplot.camera.maintain_aspect = False
 
-            elif data_option == "heatmap":
+            elif data_option.startswith("heatmap"):
                 current_graphic = subplot.add_heatmap(
                     data_array,
                     name="heatmap",
@@ -452,7 +478,7 @@ class GridPlotWrapper:
 
             subplot.name = data_option
 
-            if data_option in TEMPORAL_OPTIONS:
+            if data_option in TEMPORAL_OPTIONS_ALL:
                 self.linear_selectors.append(current_graphic.add_linear_selector())
                 subplot.camera.maintain_aspect = False
 

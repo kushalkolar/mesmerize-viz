@@ -12,7 +12,7 @@ class CNMFDataFrameVizExtension:
 
     def viz(
             self,
-            data: List[str] = None,
+            data_options: List[str] = None,
             start_index: int = 0,
             reset_timepoint_on_change: bool = False,
             data_graphic_kwargs: dict = None,
@@ -29,13 +29,18 @@ class CNMFDataFrameVizExtension:
 
         Parameters
         ----------
-        data: list of str or list of list of str
-            default [["temporal"], ["input", "rcm", "rcb", "residuals"]]
+        data_options: list of str or list of list of str
+            default [["temporal"], ["heatmap-norm"], ["input", "rcm", "rcb", "residuals"]]
+
+            **Note:** You may add suffixes to temporal and heatmap options for "dfof", "zscore", "norm",
+            examples: "temporal-dfof", "heatmap-norm", "heatmap-zscore", "heatmap-dfof", etc.
+
             list of data to plot, valid options are:
 
             +------------------+-----------------------------------------+
+            | data option      | description                             |
+            +------------------+-----------------------------------------+
             | "input"          | input movie                             |
-            +==================+=========================================+
             | "rcm"            | reconstructed movie, A * C              |
             | "rcb"            | reconstructed background, b * f         |
             | "residuals"      | residuals, input - (A * C) - (b * f)    |
@@ -74,7 +79,7 @@ class CNMFDataFrameVizExtension:
         """
         container = CNMFVizContainer(
             dataframe=self._dataframe,
-            data=data,
+            data=data_options,
             start_index=start_index,
             reset_timepoint_on_change=reset_timepoint_on_change,
             data_graphic_kwargs=data_graphic_kwargs,

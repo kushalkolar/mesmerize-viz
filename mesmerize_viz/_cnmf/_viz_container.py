@@ -9,8 +9,12 @@ from ipywidgets import Textarea, Layout, VBox, HBox, RadioButtons, Dropdown, Flo
 from IPython.display import display
 from sidecar import Sidecar
 import numpy as np
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 
-from ._wrapper import VALID_DATA_OPTIONS, GridPlotWrapper, projs, ExtensionCallWrapper, TEMPORAL_OPTIONS
+from ._wrapper import (
+    VALID_DATA_OPTIONS, GridPlotWrapper, projs, ExtensionCallWrapper, TEMPORAL_OPTIONS,
+    TEMPORAL_OPTIONS_DFOF, TEMPORAL_OPTIONS_ZSCORE, TEMPORAL_OPTIONS_NORM
+)
 from .._utils import format_params
 
 
@@ -71,6 +75,22 @@ def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_dat
         k: ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs[k]) for k in TEMPORAL_OPTIONS
     }
 
+    dfof_mappings = {
+        k: ExtensionCallWrapper(series.cnmf.get_detrend_dfof, ext_kwargs[k]) for k in TEMPORAL_OPTIONS_DFOF
+    }
+
+    zscore_mappings = {
+        k: ExtensionCallWrapper(
+            series.cnmf.get_temporal, ext_kwargs[k], post_process_func=TimeSeriesScalerMeanVariance().fit_transform
+        ) for k in TEMPORAL_OPTIONS_ZSCORE
+    }
+
+    norm_mappings = {
+        k: ExtensionCallWrapper(
+            series.cnmf.get_temporal, ext_kwargs[k], post_process_func=TimeSeriesScalerMinMax().fit_transform
+        ) for k in TEMPORAL_OPTIONS_NORM
+    }
+
     m = {
         "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
         "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
@@ -80,6 +100,9 @@ def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_dat
         "contours": ExtensionCallWrapper(series.cnmf.get_contours, ext_kwargs["contours"]),
         "empty": None,
         **temporal_mappings,
+        **dfof_mappings,
+        **zscore_mappings,
+        **norm_mappings,
         **projections,
         **rcm_rcb_projs,
         **other_data_loaders_mapping
