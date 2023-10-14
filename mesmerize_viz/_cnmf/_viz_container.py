@@ -5,7 +5,7 @@ from typing import *
 
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, Layout, VBox, HBox
+from ipywidgets import Textarea, Layout, VBox, HBox, RadioButtons, Dropdown, FloatSlider
 from IPython.display import display
 from sidecar import Sidecar
 import numpy as np
@@ -224,6 +224,8 @@ class CNMFVizContainer:
 
         self.current_row: int = start_index
 
+        self._random_colors = None
+
         self._make_gridplot(
             start_index=start_index,
             reset_timepoint_on_change=reset_timepoint_on_change,
@@ -247,6 +249,39 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+        self._dropdown_contour_colors = Dropdown(
+            options=["random", "accepted", "rejected", "snr_comps", "snr_comps_log", "r_values", "cnn_preds"],
+            value="random",
+            description='contour colors:',
+        )
+
+        self._dropdown_contour_colors.observe(self._ipywidget_set_component_colors, "value")
+
+        self._radio_visible_components = RadioButtons(
+            options=["all", "accepted", "rejected"],
+            description_tooltip="contours to make visible",
+            description="visible contours"
+        )
+
+        self._radio_visible_components.observe(self._ipywidget_set_component_colors, "value")
+
+        self._spinbox_alpha_invisible_contours = FloatSlider(
+            value=0.0,
+            min=0.0,
+            max=1.0,
+            step=0.1,
+            description="invisible alpha:",
+            description_tooltip="transparency of contours set to be invisible",
+            disabled=False
+        )
+
+        self._spinbox_alpha_invisible_contours.observe(self._ipywidget_set_component_colors, "value")
+
+        self._box_contour_controls = VBox([
+            self._dropdown_contour_colors,
+            HBox([self._radio_visible_components, self._spinbox_alpha_invisible_contours])
+        ])
+
         self.sidecar = None
 
     def _make_gridplot(
@@ -263,6 +298,12 @@ class CNMFVizContainer:
             self._dataframe.iloc[start_index],
             self.data_kwargs
         )
+
+        cnmf_obj = self._dataframe.iloc[start_index].cnmf.get_output()
+        n_contours = cnmf_obj.estimates.C.shape[0]
+
+        self._random_colors = np.random.rand(n_contours, 4).astype(np.float32)
+        self._random_colors[:, -1] = 1
 
         self._gridplot_wrapper = GridPlotWrapper(
             data=self._data,
@@ -284,17 +325,20 @@ class CNMFVizContainer:
         gridplots_widget = [gp.show(sidecar=False) for gp in self.gridplots]
 
         if "Jupyter" in self.gridplots[0].canvas.__class__.__name__:
-            vbox_elements = gridplots_widget
+            gridplot_elements = gridplots_widget
         else:
-            vbox_elements = list()
+            gridplot_elements = list()
 
         if self.sidecar is None:
             self.sidecar = Sidecar()
 
         widget = VBox(
             [
-                HBox([self.datagrid, self.params_text_area]), HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
-                VBox(vbox_elements)
+                HBox([self.datagrid, self.params_text_area]),
+                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
+                VBox(gridplot_elements),
+                HBox([self._gridplot_wrapper.checkbox_zoom_components, self._gridplot_wrapper.zoom_components_scale]),
+                self._box_contour_controls
             ]
         )
 
@@ -342,6 +386,12 @@ class CNMFVizContainer:
 
         self._set_params_text_area(index)
 
+        cnmf_obj = self._dataframe.iloc[index].cnmf.get_output()
+        n_contours = cnmf_obj.estimates.C.shape[0]
+
+        self._random_colors = np.random.rand(n_contours, 4).astype(np.float32)
+        self._random_colors[:, -1] = 1
+
         self.current_row = index
 
     def _set_params_text_area(self, index):
@@ -371,11 +421,30 @@ class CNMFVizContainer:
         for g in self._gridplot_wrapper.image_graphics:
             g.cmap = cmap
 
+    def _set_component_visibility(self, contours, cnmf_obj):
+        visible = self._radio_visible_components.value
+        alpha_invisible = self._spinbox_alpha_invisible_contours.value
+
+        # choose to make all or accepted or rejected visible
+        if visible == "accepted":
+            contours[cnmf_obj.estimates.idx_components_bad].colors[:, -1] = alpha_invisible
+
+        elif visible == "rejected":
+            contours[cnmf_obj.estimates.idx_components].colors[:, -1] = alpha_invisible
+
+        else:
+            # make everything visible
+            contours[:].colors[:, -1] = 1
+
+    def _ipywidget_set_component_colors(self, *args):
+        """just a wrapper to make ipywidgets happy"""
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
     def set_component_colors(
             self,
             colors: Union[str, np.ndarray],
             cmap: str = None,
-            visible: str = "all"
     ):
         """
 
@@ -390,22 +459,24 @@ class CNMFVizContainer:
         cmap: str
             custom cmap for the colors
 
-        visible: str
-            one of: all, accepted, rejected
-
         Returns
         -------
 
         """
-        if colors == "random":
-            for contours in self._gridplot_wrapper.contour_graphics:
-                contours[:].colors = "random"
-
         cnmf_obj = self._dataframe.iloc[self.current_row].cnmf.get_output()
-
         n_contours = len(self._gridplot_wrapper.contour_graphics[0])
 
-        if colors in ["accepted", "rejected", "accepted-rejected"]:
+        if colors == "random":
+            colors = self._random_colors
+            for contours in self._gridplot_wrapper.contour_graphics:
+                for i, g in enumerate(contours.graphics):
+                    g.colors = colors[i]
+
+                self._set_component_visibility(contours, cnmf_obj)
+
+            return
+
+        if colors in ["accepted", "rejected"]:
             if cmap is None:
                 cmap = "Set1"
 
@@ -418,7 +489,7 @@ class CNMFVizContainer:
             if cmap is None:
                 cmap = "spring"
 
-            elif colors == "snr_comps":
+            if colors == "snr_comps":
                 classifier = cnmf_obj.estimates.SNR_comp
 
             elif colors == "snr_comps_log":
@@ -438,19 +509,14 @@ class CNMFVizContainer:
                 classifier = colors
 
             else:
-                raise ValueError("Invalid component_colors value")
+                raise ValueError("Invalid colors value")
 
         for contours in self._gridplot_wrapper.contour_graphics:
-            contours.cmap = cmap
+            # first initialize using a quantitative cmap
+            # this ensures that setting cmap_values will work
+            contours.cmap = "gray"
+
             contours.cmap_values = classifier
+            contours.cmap = cmap
 
-            # choose to make all or accepted or rejected visible
-            if visible == "accepted":
-                contours[cnmf_obj.estimates.idx_components_bad].colors[:, -1] = 0
-
-            elif visible == "rejected":
-                contours[cnmf_obj.estimates.idx_components].colors[:, -1] = 0
-
-            else:
-                # make everything visible
-                contours[:].colors[:, -1] = 1
+            self._set_component_visibility(contours, cnmf_obj)

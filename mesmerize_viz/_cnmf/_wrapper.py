@@ -3,7 +3,7 @@ from typing import Union, List, Dict
 
 import numpy as np
 
-from ipywidgets import IntSlider, BoundedIntText, jslink
+from ipywidgets import IntSlider, BoundedIntText, jslink, Checkbox, FloatSlider
 
 from fastplotlib import GridPlot, graphics
 from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
@@ -157,9 +157,20 @@ class GridPlotWrapper:
 
         # gridplot for each sublist
         for sub_data in self._data:
-            _gridplot_kwargs = {"shape": calculate_gridshape(len(sub_data))}
-            _gridplot_kwargs.update(gridplot_kwargs)
-            self.gridplots.append(GridPlot(**_gridplot_kwargs))
+            # make the kwargs
+            final_gridplot_kwargs = {
+                "shape": calculate_gridshape(len(sub_data)),
+                "controllers": "sync"
+            }
+            # merge with any use-specified kwargs
+            # user-specified kwargs will override anything specified here
+
+            final_gridplot_kwargs.update(gridplot_kwargs)
+
+            # instantiate gridplot and add to list of gridplots
+            self.gridplots.append(
+                GridPlot(**final_gridplot_kwargs)
+            )
 
         self.temporal_graphics: List[graphics.LineGraphic] = list()
         self.temporal_stack_graphics: List[graphics.LineStack] = list()
@@ -185,7 +196,36 @@ class GridPlotWrapper:
 
         self._current_temporal_components: np.ndarray = None
 
+        self.checkbox_zoom_components = Checkbox(
+            value=True,
+            description="auto-zoom component",
+            description_tooltip="If checked, zoom into selected component"
+        )
+
+        self.zoom_components_scale = FloatSlider(
+            min=0.25,
+            max=3,
+            value=1,
+            step=0.25,
+            description="zoom scale",
+            description_tooltip="scale if zoom components is checked"
+        )
+
         self.change_data(data_mapping)
+
+    def _zoom_into_component(self, index: int):
+        if not self.checkbox_zoom_components.value:
+            return
+
+        for gridplot in self.gridplots:
+            for subplot in gridplot:
+                if "contours" not in subplot:
+                    continue
+
+                subplot.camera.show_object(
+                    subplot["contours"].graphics[index].world_object,
+                    scale=self.zoom_components_scale.value
+                )
 
     def set_component_index(self, index: int):
         # TODO: more elegant way than skip_heatmap
@@ -201,6 +241,8 @@ class GridPlotWrapper:
                 s.selection = index
 
         self.component_int_box.value = index
+
+        self._zoom_into_component(index)
 
     def _heatmap_set_component_index(self, ev):
         index = ev.pick_info["selected_index"]
