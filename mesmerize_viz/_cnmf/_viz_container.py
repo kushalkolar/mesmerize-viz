@@ -1,5 +1,6 @@
 import itertools
 from _warnings import warn
+from functools import partial
 from typing import *
 
 import pandas as pd
@@ -7,9 +8,84 @@ from ipydatagrid import DataGrid
 from ipywidgets import Textarea, Layout, VBox, HBox
 from IPython.display import display
 from sidecar import Sidecar
+import numpy as np
 
-from ._wrapper import VALID_DATA_OPTIONS, get_cnmf_data_mapping, GridPlotWrapper
+from ._wrapper import VALID_DATA_OPTIONS, GridPlotWrapper, projs, ExtensionCallWrapper, TEMPORAL_OPTIONS
 from .._utils import format_params
+
+
+def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
+    """
+    Returns dict that maps data option str to a callable that can return the corresponding data array.
+
+    For example, ``{"input": series.get_input_movie}`` maps "input" -> series.get_input_movie
+
+    Parameters
+    ----------
+    series: pd.Series
+        row/item to get mapping from
+
+    data_kwargs: dict, optional
+        optional kwargs for each of the extension functions
+
+    other_data_loaders: dict
+        {"data_option": callable}, example {"behavior": LazyVideo}
+
+    Returns
+    -------
+    dict
+        {data label: callable}
+    """
+    if data_kwargs is None:
+        data_kwargs = dict()
+
+    if other_data_loaders is None:
+        other_data_loaders = dict()
+
+    default_extension_kwargs = {k: dict() for k in VALID_DATA_OPTIONS + list(other_data_loaders.keys())}
+
+    default_extension_kwargs["contours"] = {"swap_dim": False}
+
+    ext_kwargs = {
+        **default_extension_kwargs,
+        **data_kwargs
+    }
+
+    projections = {k: partial(series.caiman.get_projection, k) for k in projs}
+
+    other_data_loaders_mapping = dict()
+
+    # make ExtensionCallWrapers for other data loaders
+    for option in list(other_data_loaders.keys()):
+        other_data_loaders_mapping[option] = ExtensionCallWrapper(other_data_loaders[option], ext_kwargs[option])
+
+    rcm_rcb_projs = dict()
+    for proj in ["mean", "min", "max", "std"]:
+        rcm_rcb_projs[f"rcm-{proj}"] = ExtensionCallWrapper(
+            series.cnmf.get_rcm,
+            ext_kwargs["rcm"],
+            attr=f"{proj}_image"
+        )
+
+    temporal_mappings = {
+        k: ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs[k]) for k in TEMPORAL_OPTIONS
+    }
+
+    m = {
+        "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
+        "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
+        "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
+        "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
+        "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
+        "contours": ExtensionCallWrapper(series.cnmf.get_contours, ext_kwargs["contours"]),
+        "empty": None,
+        **temporal_mappings,
+        **projections,
+        **rcm_rcb_projs,
+        **other_data_loaders_mapping
+    }
+
+    return m
 
 
 class CNMFVizContainer:
@@ -284,3 +360,97 @@ class CNMFVizContainer:
 
         # diffs and full params
         self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+
+
+    @property
+    def cmap(self) -> str:
+        return self._gridplot_wrapper.cmap
+
+    @cmap.setter
+    def cmap(self, cmap: str):
+        for g in self._gridplot_wrapper.image_graphics:
+            g.cmap = cmap
+
+    def set_component_colors(
+            self,
+            colors: Union[str, np.ndarray],
+            cmap: str = None,
+            visible: str = "all"
+    ):
+        """
+
+        Parameters
+        ----------
+        colors: str or np.ndarray
+            np.ndarray or one of: random, accepted, rejected, accepted-rejected, snr_comps, snr_comps_log,
+            r_values, cnn_preds
+
+            If np.ndarray, it must be of the same length as the number of components
+
+        cmap: str
+            custom cmap for the colors
+
+        visible: str
+            one of: all, accepted, rejected
+
+        Returns
+        -------
+
+        """
+        if colors == "random":
+            for contours in self._gridplot_wrapper.contour_graphics:
+                contours[:].colors = "random"
+
+        cnmf_obj = self._dataframe.iloc[self.current_row].cnmf.get_output()
+
+        n_contours = len(self._gridplot_wrapper.contour_graphics[0])
+
+        if colors in ["accepted", "rejected", "accepted-rejected"]:
+            if cmap is None:
+                cmap = "Set1"
+
+            # make a empty array for cmap_values
+            classifier = np.zeros(n_contours, dtype=int)
+            # set the accepted components to 1
+            classifier[cnmf_obj.estimates.idx_components] = 1
+
+        else:
+            if cmap is None:
+                cmap = "spring"
+
+            elif colors == "snr_comps":
+                classifier = cnmf_obj.estimates.SNR_comp
+
+            elif colors == "snr_comps_log":
+                classifier = np.log10(cnmf_obj.estimates.SNR_comp)
+
+            elif colors == "r_values":
+                classifier = cnmf_obj.estimates.r_values
+
+            elif colors == "cnn_preds":
+                classifier = cnmf_obj.estimates.cnn_preds
+
+            elif isinstance(colors, np.ndarray):
+                if not colors.size == n_contours:
+                    raise ValueError(f"If using np.ndarray cor component_colors, the array size must be "
+                                     f"the same as n_contours: {n_contours}, your array size is: {colors.size}")
+
+                classifier = colors
+
+            else:
+                raise ValueError("Invalid component_colors value")
+
+        for contours in self._gridplot_wrapper.contour_graphics:
+            contours.cmap = cmap
+            contours.cmap_values = classifier
+
+            # choose to make all or accepted or rejected visible
+            if visible == "accepted":
+                contours[cnmf_obj.estimates.idx_components_bad].colors[:, -1] = 0
+
+            elif visible == "rejected":
+                contours[cnmf_obj.estimates.idx_components].colors[:, -1] = 0
+
+            else:
+                # make everything visible
+                contours[:].colors[:, -1] = 1

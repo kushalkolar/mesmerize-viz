@@ -1,14 +1,12 @@
-from functools import partial
 from itertools import product
 from typing import Union, List, Dict
 
 import numpy as np
-import pandas as pd
 
 from ipywidgets import IntSlider, BoundedIntText, jslink
 
 from fastplotlib import GridPlot, graphics
-from fastplotlib.graphics.selectors import LinearSelector, Synchronizer, LinearRegionSelector
+from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
 from fastplotlib.utils import calculate_gridshape
 
 
@@ -89,80 +87,6 @@ class ExtensionCallWrapper:
         return rval
 
 
-def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
-    """
-    Returns dict that maps data option str to a callable that can return the corresponding data array.
-
-    For example, ``{"input": series.get_input_movie}`` maps "input" -> series.get_input_movie
-
-    Parameters
-    ----------
-    series: pd.Series
-        row/item to get mapping from
-
-    data_kwargs: dict, optional
-        optional kwargs for each of the extension functions
-
-    other_data_loaders: dict
-        {"data_option": callable}, example {"behavior": LazyVideo}
-
-    Returns
-    -------
-    dict
-        {data label: callable}
-    """
-    if data_kwargs is None:
-        data_kwargs = dict()
-
-    if other_data_loaders is None:
-        other_data_loaders = dict()
-
-    default_extension_kwargs = {k: dict() for k in VALID_DATA_OPTIONS + list(other_data_loaders.keys())}
-
-    default_extension_kwargs["contours"] = {"swap_dim": False}
-
-    ext_kwargs = {
-        **default_extension_kwargs,
-        **data_kwargs
-    }
-
-    projections = {k: partial(series.caiman.get_projection, k) for k in projs}
-
-    other_data_loaders_mapping = dict()
-
-    # make ExtensionCallWrapers for other data loaders
-    for option in list(other_data_loaders.keys()):
-        other_data_loaders_mapping[option] = ExtensionCallWrapper(other_data_loaders[option], ext_kwargs[option])
-
-    rcm_rcb_projs = dict()
-    for proj in ["mean", "min", "max", "std"]:
-        rcm_rcb_projs[f"rcm-{proj}"] = ExtensionCallWrapper(
-            series.cnmf.get_rcm,
-            ext_kwargs["rcm"],
-            attr=f"{proj}_image"
-        )
-
-    temporal_mappings = {
-        k: ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs[k]) for k in TEMPORAL_OPTIONS
-    }
-
-    m = {
-        "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
-        "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
-        "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
-        "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
-        "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
-        "contours": ExtensionCallWrapper(series.cnmf.get_contours, ext_kwargs["contours"]),
-        "empty": None,
-        **temporal_mappings,
-        **projections,
-        **rcm_rcb_projs,
-        **other_data_loaders_mapping
-    }
-
-    return m
-
-
 class GridPlotWrapper:
     """Wraps GridPlot in a way that allows updating the data"""
 
@@ -212,7 +136,7 @@ class GridPlotWrapper:
         if gridplot_kwargs is None:
             gridplot_kwargs = dict()
 
-        self._cmap = cmap
+        self.cmap = cmap
 
         self.component_colors = component_colors
 
@@ -281,6 +205,11 @@ class GridPlotWrapper:
     def _heatmap_set_component_index(self, ev):
         index = ev.pick_info["selected_index"]
 
+        if ev.pick_info["pygfx_event"] is None:
+            # this means that the selector was not triggered by the user but that it moved due to another event
+            # so we don't set_component_index because then infinite recursion
+            return
+
         self.set_component_index(index)
 
     def _parse_data(self, data_options, data_mapping) -> List[List[np.ndarray]]:
@@ -302,25 +231,6 @@ class GridPlotWrapper:
                 data_arrays.append(a)
 
         return data_arrays
-
-    @property
-    def cmap(self) -> str:
-        return self._cmap
-
-    @cmap.setter
-    def cmap(self, cmap: str):
-        for g in self.image_graphics:
-            g.cmap = cmap
-
-    # @property
-    # def component_colors(self) -> Any:
-    #     pass
-    #
-    # @component_colors.setter
-    # def component_colors(self, colors: Any):
-    #     for collection in self.contour_graphics:
-    #         for g in collection.graphics:
-    #
 
     def change_data(self, data_mapping: Dict[str, callable]):
         """
