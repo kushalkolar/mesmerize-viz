@@ -211,7 +211,8 @@ class CNMFVizContainer:
             height="250px",
             max_height="250px",
             width="360px",
-            max_width="500px"
+            max_width="500px",
+            disabled=True,
         )
 
         # data options is private since this can't be changed once an image widget has been made
