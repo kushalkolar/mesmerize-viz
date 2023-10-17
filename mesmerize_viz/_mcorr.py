@@ -321,7 +321,7 @@ class McorrVizContainer:
         # diffs and full params
         self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
 
-    def show(self):
+    def show(self, sidecar: bool = True):
         """
         Show the widget
         """
@@ -331,12 +331,17 @@ class McorrVizContainer:
 
         self.image_widget.reset_vmin_vmax()
 
-        with self.sidecar:
-            return display(VBox([
+        widget = VBox([
                 HBox([self.datagrid, self.params_text_area]),
                 self.image_widget.show(sidecar=False),
                 self.slider_mean_window
-            ]))
+            ])
+
+        if not sidecar:
+            return widget
+
+        with self.sidecar:
+            return display(widget)
 
 
 @pd.api.extensions.register_dataframe_accessor("mcorr")
