@@ -13,7 +13,7 @@ class CNMFDataFrameVizExtension:
     def viz(
             self,
             data_options: List[str] = None,
-            start_index: int = 0,
+            start_index: int = None,
             reset_timepoint_on_change: bool = False,
             data_graphic_kwargs: dict = None,
             gridplot_kwargs: dict = None,
@@ -29,8 +29,8 @@ class CNMFDataFrameVizExtension:
 
         Parameters
         ----------
-        data_options: list of str or list of list of str
-            default [["temporal"], ["heatmap-norm"], ["input", "rcm", "rcb", "residuals"]]
+        data_options: list of list of str
+            default [["temporal"], ["heatmap-zscore"], ["input", "rcm", "rcb", "residuals"]]
 
             **Note:** You may add suffixes to temporal and heatmap options for "dfof", "zscore", "norm",
             examples: "temporal-dfof", "heatmap-norm", "heatmap-zscore", "heatmap-dfof", etc.

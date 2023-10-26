@@ -74,7 +74,12 @@ class ExtensionCallWrapper:
             post_process_func: callable = None,
     ):
         """
-        Basically like ``functools.partial`` but supports kwargs.
+        Basically a very fancy ``functools.partial``.
+
+        In addition to behaving like ``functools.partial``, it supports:
+            - kwargs
+            - returning attributes of the return value from the callable
+            - postprocessing the return value
 
         Parameters
         ----------
@@ -204,7 +209,7 @@ class GridPlotWrapper:
         self.image_graphics: List[graphics.ImageGraphic] = list()
         self.contour_graphics: List[graphics.LineCollection] = list()
 
-        self.heatmap_selectors: List[LinearSelector] = list()
+        self.heatmap_component_ix_selectors: List[LinearSelector] = list()  # selects heatmap rows, i.e. components
 
         self._managed_graphics: List[list] = [
             self.temporal_graphics,
@@ -216,7 +221,9 @@ class GridPlotWrapper:
         # to store only image data in a 1:1 mapping to the graphics list
         self.image_graphic_arrays: List[np.ndarray] = list()
 
-        self.linear_selectors: List[LinearSelector] = list()
+        self.linear_selectors: List[LinearSelector] = list()  # select current timepoint, i.e. frame index
+
+        self._synchronizer: Synchronizer = Synchronizer(key_bind=None)  # synchronizes linear_selectors
 
         self._current_frame_index: int = 0
 
@@ -261,7 +268,7 @@ class GridPlotWrapper:
         for g in self.temporal_graphics:
             g.data = self._current_temporal_components[index]
 
-        for s in self.heatmap_selectors:
+        for s in self.heatmap_component_ix_selectors:
             # TODO: Very hacky for now, ignores if the slider is currently being moved, prevents weird slider movement
             if s._move_info is None:
                 s.selection = index
@@ -317,7 +324,8 @@ class GridPlotWrapper:
         for l in self._managed_graphics:
             l.clear()
 
-        self.heatmap_selectors.clear()
+        self._synchronizer.clear()  # must clear synchronizer first before the selectors, else lingering weakrefs
+        self.heatmap_component_ix_selectors.clear()
         self.linear_selectors.clear()
 
         self.image_graphic_arrays.clear()
@@ -352,14 +360,11 @@ class GridPlotWrapper:
         # connect events
         self._connect_events()
 
-        # sync sliders if multiple are present
-        if len(self.linear_selectors) > 0:
-            self._synchronizer = Synchronizer(*self.linear_selectors, key_bind=None)
-
         for ls in self.linear_selectors:
             ls.selection.add_event_handler(self.set_frame_index)
+            self._synchronizer.add(ls)  # sync linear_selectors
 
-        for hs in self.heatmap_selectors:
+        for hs in self.heatmap_component_ix_selectors:
             hs.selection.add_event_handler(self._heatmap_set_component_index)
 
     def _change_data_gridplot(
@@ -450,7 +455,7 @@ class GridPlotWrapper:
                     thickness=5,
                 )
 
-                self.heatmap_selectors.append(selector)
+                self.heatmap_component_ix_selectors.append(selector)
 
             else:
                 # else it is an image
@@ -516,9 +521,6 @@ class GridPlotWrapper:
             )
 
             contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=5)
-
-            # for temporal_graphic in self.temporal_graphics:
-            #     contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
 
             for cg, tsg in product(self.contour_graphics, self.temporal_stack_graphics):
                 cg.link("colors", target=contour_graphic, feature="colors", new_data="w", bidirectional=True)

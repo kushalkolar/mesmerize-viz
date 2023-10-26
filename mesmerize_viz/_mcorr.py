@@ -63,7 +63,7 @@ class McorrVizContainer:
         self,
             dataframe: pd.DataFrame,
             data_options: List[str] = None,
-            start_index: int = 0,
+            start_index: int = None,
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs: dict = None,
             image_widget_kwargs: dict = None,
@@ -89,7 +89,7 @@ class McorrVizContainer:
             | pnr         | peak-noise-ratio image, if computed |
             +-------------+-------------------------------------+
 
-        start_index: int, default 0
+        start_index: int
             start index item used to set the initial data in the ImageWidget
 
         reset_timepoint_on_change: bool, default False
@@ -179,6 +179,10 @@ class McorrVizContainer:
 
         self.reset_timepoint_on_change = reset_timepoint_on_change
         self.image_widget: ImageWidget = None
+
+        # try to guess the start index
+        if start_index is None:
+            start_index = dataframe[dataframe.algo == "mcorr"].iloc[0].name
 
         self.current_row: int = start_index
 

@@ -118,7 +118,7 @@ class CNMFVizContainer:
         self,
             dataframe: pd.DataFrame,
             data: List[str] = None,
-            start_index: int = 0,
+            start_index: int = None,
             reset_timepoint_on_change: bool = False,
             data_graphic_kwargs: dict = None,
             gridplot_kwargs: dict = None,
@@ -136,7 +136,7 @@ class CNMFVizContainer:
         ----------
         dataframe: pd.DataFrame
 
-        data: list of str
+        data: list of str, or list of list of str
             data options, such as "input", "temporal", "contours", etc.
 
         start_index
@@ -161,7 +161,11 @@ class CNMFVizContainer:
         """
 
         if data is None:
-            data = [["temporal"], ["input", "rcm", "rcb", "residuals"]]
+            data = [["temporal"], ["heatmap-zscore"], ["input", "rcm", "rcb", "residuals"]]
+            # if it's the default options, it will hstack the temporal and heatmap next to the image data
+            self.default = True
+        else:
+            self.default = False
 
         if other_data_loaders is None:
             other_data_loaders = dict()
@@ -245,6 +249,10 @@ class CNMFVizContainer:
             data_kwargs = dict()
 
         self.data_kwargs = data_kwargs
+
+        if start_index is None:
+            # try to guess the start index
+            start_index = dataframe[dataframe.algo == "cnmf"].iloc[0].name
 
         self.current_row: int = start_index
 
@@ -346,11 +354,25 @@ class CNMFVizContainer:
         """Show the widget"""
 
         # create gridplots and start render loop
-        gridplots_widget = [gp.show(sidecar=False) for gp in self.gridplots]
+        gridplots = [gp.show(sidecar=False) for gp in self.gridplots]
+
+        # contour color controls and auto-zoom
+        contour_controls = VBox(
+            [
+                HBox([self._gridplot_wrapper.checkbox_zoom_components, self._gridplot_wrapper.zoom_components_scale]),
+                self._box_contour_controls
+            ]
+        )
 
         if "Jupyter" in self.gridplots[0].canvas.__class__.__name__:
-            gridplot_elements = gridplots_widget
+            if self.default:
+                # TODO: let's just make this the mandatory behavior, temporal + heatmap on left, any image stuff on right
+                # temporal and heatmap on left side, image data on right side
+                gridplot_elements = HBox([VBox(gridplots[:2]), VBox([gridplots[2], contour_controls])])
+            else:
+                gridplot_elements = VBox(gridplots)
         else:
+            raise NotImplemented("show() not implemented outside of jupyter")
             gridplot_elements = list()
 
         if self.sidecar is None:
@@ -360,9 +382,7 @@ class CNMFVizContainer:
             [
                 HBox([self.datagrid, self.params_text_area]),
                 HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
-                VBox(gridplot_elements),
-                HBox([self._gridplot_wrapper.checkbox_zoom_components, self._gridplot_wrapper.zoom_components_scale]),
-                self._box_contour_controls
+                gridplot_elements,
             ]
         )
 
