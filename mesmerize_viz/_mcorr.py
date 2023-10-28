@@ -165,7 +165,6 @@ class McorrVizContainer:
         # default kwargs unless user has specified more
         default_iw_kwargs = {
             "window_funcs": {"t": (np.mean, 11)},
-            "vmin_vmax_sliders": True,
             "cmap": "gnuplot2"
         }
 
