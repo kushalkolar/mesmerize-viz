@@ -229,7 +229,7 @@ class CNMFVizContainer:
                     f"{IMAGE_OPTIONS}"
                 )
 
-        self.image_data_options = image_data_options
+        self._image_data_options = image_data_options
 
         self.temporal_data_option = temporal_data_option
         self.temporal_kwargs = temporal_kwargs
@@ -326,6 +326,8 @@ class CNMFVizContainer:
 
         self._synchronizer = fpl.Synchronizer(key_bind=None)
 
+        self._contour_graphics: List[fpl.LineCollection] = list()
+
         data_arrays = self._get_row_data(index=start_index)
         self._set_data(data_arrays)
 
@@ -359,7 +361,7 @@ class CNMFVizContainer:
         size = rcm.shape[0] * rcm.shape[1] * rcm.shape[2]
 
         images = list()
-        for option in self.image_data_options:
+        for option in self._image_data_options:
             array = data_mapping[option]()
 
             if array.ndim == 2:  # for 2D images, to make ImageWidget happy
@@ -367,9 +369,12 @@ class CNMFVizContainer:
 
             images.append(array)
 
+        contours = data_mapping["contours"]()
+
         data_arrays = {
             "temporal": temporal,
             "images": images,
+            "contours": contours,
         }
 
         return data_arrays
@@ -396,7 +401,7 @@ class CNMFVizContainer:
             self._set_data(data_arrays)
 
     def _set_data(self, data_arrays: Dict[str, np.ndarray]):
-        # self._contour_graphics.clear()
+        self._contour_graphics.clear()
 
         self._plot_temporal.clear()
         self._plot_heatmap.clear()
@@ -406,6 +411,7 @@ class CNMFVizContainer:
         if self._image_widget is None:
             self._image_widget = fpl.ImageWidget(
                 data=data_arrays["images"],
+                names=self._image_data_options,
                 **self.image_widget_kwargs
             )
 
@@ -415,11 +421,13 @@ class CNMFVizContainer:
         else:
             self._image_widget.set_data(data_arrays["images"])
 
-        temporal = data_arrays["temporal"]
+        self._temporal_data = data_arrays["temporal"]
 
-        self._plot_temporal.add_line(temporal[0], name="line")
-        self._plot_heatmap.add_heatmap(temporal, name="heatmap")
+        # make temporal graphics
+        self._plot_temporal.add_line(self._temporal_data[0], name="line")
+        self._plot_heatmap.add_heatmap(self._temporal_data, name="heatmap")
 
+        # linear selectors and events
         self._linear_selector_temporal: fpl.LinearSelector = self._plot_temporal["line"].add_linear_selector()
         self._linear_selector_temporal.selection.add_event_handler(self._set_frame_index_from_linear_selector)
 
@@ -436,6 +444,61 @@ class CNMFVizContainer:
             # ipywidget
             self._image_widget.sliders["t"].observe(self._set_linear_selector_index_from_image_widget, "value")
 
+        contours = data_arrays["contours"][0]
+
+        n_components = len(contours)
+        component_colors = np.random.rand(n_components, 4).astype(np.float32)
+        component_colors[:, -1] = 1
+
+        for subplot in self._image_widget.gridplot:
+            contour_graphic = subplot.add_line_collection(
+                contours,
+                colors=component_colors,
+                name="contours"
+            )
+            self._contour_graphics.append(contour_graphic)
+
+            image_graphic = subplot["image_widget_managed"]
+
+            image_graphic.link(
+                "click",
+                target=contour_graphic,
+                feature="colors",
+                new_data="w",
+                callback=self._euclidean
+            )
+
+            contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
+
+    def _euclidean(self, source, target, event, new_data):
+        """maps click events to contour"""
+        # calculate coms of line collection
+        indices = np.array(event.pick_info["index"])
+
+        coms = list()
+
+        for contour in target.graphics:
+            coors = contour.data()[~np.isnan(contour.data()).any(axis=1)]
+            com = coors.mean(axis=0)
+            coms.append(com)
+
+        # euclidean distance to find closest index of com
+        indices = np.append(indices, [0])
+
+        ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
+
+        self.set_component_index(ix)
+        #
+        # self.component_int_box.value = ix
+
+        return None
+
+    def set_component_index(self, ix):
+        for g in self._contour_graphics:
+            g.set_feature(feature="colors", new_data="w", indices=ix)
+
+        self._plot_temporal["line"].data = self._temporal_data[ix]
+
     def _set_frame_index_from_linear_selector(self, ev):
         # TODO: hacky mess, need to make ImageWidget emit events
         ix = ev.pick_info["selected_index"]
@@ -451,6 +514,7 @@ class CNMFVizContainer:
             ix = ev
 
         self._linear_selector_temporal.selection = ix
+        self._linear_selector_heatmap.selection = ix
 
     def show(self, sidecar: bool = False):
         """
