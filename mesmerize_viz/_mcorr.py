@@ -58,6 +58,9 @@ def get_mcorr_data_mapping(series: pd.Series) -> dict:
 
 class McorrVizContainer:
     """Widget that contains the DataGrid, params text box and ImageWidget"""
+    @property
+    def widget(self):
+        return self._widget
 
     def __init__(
         self,
@@ -223,6 +226,7 @@ class McorrVizContainer:
         # self._checkbox_mean_diff
 
         self.sidecar = None
+        self._widget = None
 
     def _set_mean_window_size(self, change):
         self.image_widget.window_funcs = {"t": (np.mean, change["new"])}
@@ -329,22 +333,31 @@ class McorrVizContainer:
         Show the widget
         """
 
-        if self.sidecar is None:
-            self.sidecar = Sidecar()
-
         self.image_widget.reset_vmin_vmax()
 
-        widget = VBox([
-                HBox([self.datagrid, self.params_text_area]),
-                self.image_widget.show(sidecar=False),
-                self.slider_mean_window
-            ])
+        datagrid_params = HBox([self.datagrid, self.params_text_area])
 
-        if not sidecar:
-            return widget
+        if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+            self._widget = VBox([
+                    datagrid_params,
+                    self.image_widget.show(sidecar=False),
+                    self.slider_mean_window
+                ])
 
-        with self.sidecar:
-            return display(widget)
+            if not sidecar:
+                return self.widget
+
+            if self.sidecar is None:
+                self.sidecar = Sidecar()
+
+            with self.sidecar:
+                return display(self.widget)
+
+        elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+            # shown the image widget in Qt window
+            self.image_widget.show()
+            # return datagrid to show in jupyter
+            return datagrid_params
 
 
 @pd.api.extensions.register_dataframe_accessor("mcorr")
