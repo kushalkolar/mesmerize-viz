@@ -1,32 +1,32 @@
 # mesmerize-viz
 
-Currently has basic functionality for mcorr and cnmf visualization
+This is currently in beta. Motion Correction and CNMF visualizations should just work.
 
-https://github.com/kushalkolar/mesmerize-viz/assets/9403332/490dac6e-d57c-4996-9d77-a391d67ed049
+https://www.youtube.com/watch?v=GWvaEeqA1hw
 
 ## Installation
-
-Note that `mesmerize-viz` currently requires the latest `fastplotlib` and `pygfx` from github.
 
 Assuming you have `mesmerize-core` installed:
 
 ```bash
-git clone https://github.com/pygfx/pygfx.git
-cd pygfx
-pip install -e .
-
-git clone https://github.com/kushalkolar/fastplotlib.git
-cd fastplotlib
-pip install -e .
-
 git clone https://github.com/kushalkolar/mesmerize-viz.git
 cd mesmerize-viz
 pip install -e .
 ```
 
+If you want to use `%gui qt` you will need pyqt6:
+
+```
+pip install PyQt6
+```
+
 ## Usage
 
-See the example notebooks, or use as a voila app.
+See the example notebooks
+
+## Voila app
+
+WIP
 
 Install voila:
 
