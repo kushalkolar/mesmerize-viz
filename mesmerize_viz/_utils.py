@@ -1,9 +1,6 @@
-from itertools import chain
-from functools import wraps
 from typing import *
 
 import numpy as np
-from mesmerize_core.arrays._base import LazyArray
 
 
 # to format params dict into yaml-like string
@@ -13,37 +10,6 @@ format_params = lambda d, t: "\n" * is_pos(t) + \
     "\n".join(
         [": ".join(["   " * t + k, format_params(v, t + 1)]) for k, v in d.items()]
     ) if isinstance(d, dict) else str(d)
-
-
-def validate_data_options():
-    def dec(func):
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            if "data_options" in kwargs:
-                data_options = kwargs["data_options"]
-            else:
-                if len(args) > 0:
-                    data_options = args[0]
-                else:
-                    # assume the extension func will take care of it
-                    # the default data arg is None is nothing is passed
-                    return func(self, *args, **kwargs)
-
-            # flatten
-            if any([isinstance(d, (list, tuple)) for d in data_options]):
-                data_options = list(chain.from_iterable(data_options))
-
-            valid_options = list(self._data_mapping.keys())
-
-            for d in data_options:
-                if d not in valid_options:
-                    raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
-                                   f"\n{valid_options}")
-            return func(self, *args, **kwargs)
-
-        return wrapper
-
-    return dec
 
 
 class DummyMovie:
