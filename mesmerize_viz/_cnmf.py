@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from functools import partial
 from typing import *
 from warnings import warn
@@ -6,7 +7,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
+from ipywidgets import Button, Tab, Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, BoundedFloatText, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 import fastplotlib as fpl
 from caiman.source_extraction.cnmf import CNMF
@@ -136,6 +137,107 @@ def get_cnmf_data_mapping(
     }
 
     return mapping
+
+
+class EvalController:
+    def __init__(self):
+        self._float_metrics = [
+            "min_SNR",
+            "SNR_lowest",
+            "rval_thr",
+            "rval_lowest",
+            "min_cnn_thr",
+            "cnn_lowest",
+
+        ]
+
+        # caiman is really annoying with this
+        # maps eval metric to the estimates attrs
+        self._metric_array_mapping = {
+            "min_SNR": "SNR_comp",
+            "SNR_lowest": "SNR_comp",
+            "rval_thr": "r_values",
+            "rval_lowest": "r_values",
+            "min_cnn_thr": "cnn_preds",
+            "cnn_lowest": "cnn_preds",
+        }
+
+        self._widgets = OrderedDict()
+
+        param_entries = list()
+
+        for metric in self._float_metrics:
+            slider = FloatSlider(value=0, min=0, max=1, step=0.01, description=metric)
+            spinbox = BoundedFloatText(
+                value=0, min=0, max=1, step=0.01, description_tooltip=metric, layout=Layout(width="70px")
+            )
+
+            slider.observe(self._call_handlers, "value")
+            spinbox.observe(self._call_handlers, "value")
+
+            jslink((slider, "value"), (spinbox, "value"))
+
+            param_entries.append(HBox([spinbox, slider]))
+
+            # keep this so it's easier to modify in set_limits
+            self._widgets[metric] = {"slider": slider, "spinbox": spinbox}
+
+        self.use_cnn_checkbox = Checkbox(
+            value=True,
+            description="use_cnn",
+            description_tooltip="use CNN classifier"
+        )
+
+        self.widget = VBox([*param_entries, self.use_cnn_checkbox])
+
+        self._handlers = list()
+
+        # limits must be set first before it's usable
+        self._block_handlers = True
+
+        self.button_save_eval = Button(description="Save Eval")
+
+    def set_limits(self, cnmf_obj: CNMF):
+        self._block_handlers = True
+        for metric in self._float_metrics:
+            metric_array = getattr(cnmf_obj.estimates, self._metric_array_mapping[metric])
+            for kind in ["slider", "spinbox"]:
+                # allow 100 steps
+                self._widgets[metric][kind].step = np.ptp(metric_array) / 100
+                self._widgets[metric][kind].min = metric_array.min()
+                self._widgets[metric][kind].max = metric_array.max()
+                self._widgets[metric][kind].value = cnmf_obj.params.get_group("quality")[metric]
+
+        self.use_cnn_checkbox.value = cnmf_obj.params.get_group("quality")["use_cnn"]
+
+        self._block_handlers = False
+
+    def get_data(self):
+        data = dict()
+        for metric in self._float_metrics:
+            data[metric] = self._widgets[metric]["spinbox"].value
+
+        data["use_cnn"] = self.use_cnn_checkbox.value
+
+        return data
+
+    def add_handler(self, func: callable):
+        """Handlers must accept a dict argument, the dict has the eval params"""
+        self._handlers.append(func)
+
+    def _call_handlers(self, obj):
+        if self._block_handlers:
+            return
+
+        data = self.get_data()
+        for handler in self._handlers:
+            handler(data)
+
+    def remove_handler(self, func: callable):
+        self._handlers.remove(func)
+
+    def clear_handlers(self):
+        self._handlers.clear()
 
 
 class CNMFVizContainer:
@@ -393,6 +495,13 @@ class CNMFVizContainer:
             HBox([self._radio_visible_components, self._spinbox_alpha_invisible_contours])
         ])
 
+        self._eval_controller = EvalController()
+        self._eval_controller.add_handler(self._set_eval)
+        self._eval_controller.button_save_eval.on_click(self._save_eval)
+
+        self._tab_contours_eval = Tab()
+        self._tab_contours_eval.children = [self._box_contour_controls, self._eval_controller.widget]
+
         # plots
         self._plot_temporal = fpl.Plot(size=(500, 120))
         self._plot_temporal.camera.maintain_aspect = False
@@ -564,7 +673,11 @@ class CNMFVizContainer:
         self.component_int_box.max = n_components - 1
         self.component_slider.max = n_components - 1
 
+        # current state of CNMF object
+        # this can be different from the one in the dataframe if the user uses eval
         self._cnmf_obj: CNMF = data_arrays["cnmf_obj"]
+
+        self._eval_controller.set_limits(self._cnmf_obj)
 
     def _euclidean(self, source, target, event, new_data):
         """maps click events to contour"""
@@ -678,7 +791,7 @@ class CNMFVizContainer:
         -------
 
         """
-        cnmf_obj = self._dataframe.iloc[self.current_row].cnmf.get_output()
+        cnmf_obj = self._cnmf_obj
         n_contours = len(self._image_widget.gridplot[0, 0]["contours"])
 
         # use the random colors
@@ -751,6 +864,28 @@ class CNMFVizContainer:
             # make everything visible
             contours[:].colors[:, -1] = 1
 
+    def _set_eval(self, eval_params: dict):
+        index = self._get_selected_row()
+        # wonky caiman params object stuff
+        self._cnmf_obj.params.quality.update(eval_params)
+
+        self._cnmf_obj.estimates.filter_components(
+            imgs=self._dataframe.iloc[index].caiman.get_input_movie(),
+            params=self._cnmf_obj.params
+        )
+
+        # set the colors
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
+    def _save_eval(self, obj):
+        index = self._get_selected_row()
+
+        eval_params = self._eval_controller.get_data()
+        # this overwrites hdf5 file
+        self._dataframe.iloc[index].cnmf.run_eval(eval_params)
+        print("Overwrote CNMF object with new eval")
+
     def show(self, sidecar: bool = False):
         """
         Show the widget
@@ -766,7 +901,7 @@ class CNMFVizContainer:
 
         temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
 
-        iw_contour_controls = VBox([self._image_widget.widget, self._box_contour_controls])
+        iw_contour_controls = VBox([self._image_widget.widget, self._tab_contours_eval])
 
         plots = HBox([temporals, iw_contour_controls])
 
