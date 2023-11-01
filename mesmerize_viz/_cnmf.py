@@ -13,6 +13,8 @@ import fastplotlib as fpl
 from fastplotlib.utils import get_cmap
 from caiman.source_extraction.cnmf import CNMF
 
+from mesmerize_core.caiman_extensions.cnmf import cnmf_cache
+
 
 from ._utils import DummyMovie, format_params
 
@@ -253,6 +255,31 @@ class EvalController:
 
 class CNMFVizContainer:
     """Widget that contains the DataGrid, params text box fastplotlib GridPlot, etc"""
+
+    @property
+    def component_index(self) -> int:
+        """Current component index"""
+        return self._component_index
+
+    @property
+    def plot_temporal(self) -> fpl.Plot:
+        """Plot with the single temporal trace"""
+        return self._plot_temporal
+
+    @property
+    def plot_heatmap(self) -> fpl.Plot:
+        """Plot with the heatmap"""
+        return self._plot_heatmap
+
+    @property
+    def image_widget(self) -> fpl.ImageWidget:
+        """ImageWidget"""
+        return self._image_widget
+
+    @property
+    def cnmf_obj(self) -> CNMF:
+        """Current CNMF object displayed in the viewer, use with care"""
+        return self._cnmf_obj
 
     def __init__(
         self,
@@ -528,8 +555,14 @@ class CNMFVizContainer:
 
         self._contour_graphics: List[fpl.LineCollection] = list()
 
+        self._component_index = 0
+
+        self._cnmf_obj: CNMF = None
+
         data_arrays = self._get_row_data(index=start_index)
         self._set_data(data_arrays)
+
+        self._set_params_text_area(index=start_index)
 
     def _get_selected_row(self) -> Union[int, None]:
         r1 = self.datagrid.selections[0]["r1"]
@@ -628,24 +661,7 @@ class CNMFVizContainer:
         self._plot_temporal.clear()
         self._plot_heatmap.clear()
 
-        if self._image_widget is None:
-            self._image_widget = fpl.ImageWidget(
-                data=data_arrays["images"],
-                names=self._image_data_options,
-                **self.image_widget_kwargs
-            )
-
-            # need to start it here so that we can access the toolbar to link events with the slider
-            self._image_widget.show()
-
-        else:
-            # image widget doesn't need clear, we can just use set_data
-            self._image_widget.set_data(data_arrays["images"])
-            for subplot in self._image_widget.gridplot:
-                if "contours" in subplot:
-                    # delete the contour graphics
-                    subplot.delete_graphic(subplot["contours"])
-
+        # make our temporal plots first, else image widget slider events could trigger linear selectors
         self._temporal_data = data_arrays["temporal"]
 
         # make temporal graphics
@@ -666,6 +682,26 @@ class CNMFVizContainer:
         # sync the linear selectors
         self._synchronizer.add(self._linear_selector_temporal)
         self._synchronizer.add(self._linear_selector_heatmap)
+
+        if self._image_widget is None:
+            self._image_widget = fpl.ImageWidget(
+                data=data_arrays["images"],
+                names=self._image_data_options,
+                **self.image_widget_kwargs
+            )
+
+            self._image_widget.gridplot.renderer.add_event_handler(self._manual_toggle_component, "key_down")
+
+            # need to start it here so that we can access the toolbar to link events with the slider
+            self._image_widget.show()
+
+        else:
+            # image widget doesn't need clear, we can just use set_data
+            self._image_widget.set_data(data_arrays["images"])
+            for subplot in self._image_widget.gridplot:
+                if "contours" in subplot:
+                    # delete the contour graphics
+                    subplot.delete_graphic(subplot["contours"])
 
         # absolute garbage monkey patch which I will fix once we make ImageWidget emit its own events
         if hasattr(self._image_widget.sliders["t"], "qslider"):
@@ -693,12 +729,12 @@ class CNMFVizContainer:
             image_graphic.link(
                 "click",
                 target=contour_graphic,
-                feature="colors",
-                new_data="w",
+                feature="thickness",
+                new_data=5,
                 callback=self._euclidean
             )
 
-            contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
+            # contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
 
         self.component_int_box.value = 0
         self.component_slider.value = 0
@@ -744,9 +780,12 @@ class CNMFVizContainer:
             index = index.pick_info["selected_index"]
 
         for g in self._contour_graphics:
-            g.set_feature(feature="colors", new_data="w", indices=index)
+            g.set_feature(feature="thickness", new_data=8, indices=index)
 
         self._plot_temporal["line"].data = self._temporal_data[index]
+
+        # set the component index property
+        self._component_index = index
 
         if self._component_linear_selector._move_info is None:
             # TODO: Very hacky for now, ignores if the slider is currently being moved by the user
@@ -766,6 +805,7 @@ class CNMFVizContainer:
                    f"cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} ")
 
         self._component_metrics_text.value = metrics
+
 
     def _zoom_into_component(self, index: int):
         if not self.checkbox_zoom_components.value:
@@ -924,12 +964,64 @@ class CNMFVizContainer:
         self._set_eval(cnmf_obj.params.get_group("quality"))
 
     def _save_eval(self, obj):
+        # this overwrites the hdf5 file
         index = self._get_selected_row()
 
-        eval_params = self._eval_controller.get_data()
-        # this overwrites hdf5 file
-        self._dataframe.iloc[index].cnmf.run_eval(eval_params)
+        # delete existing file
+        path = self._dataframe.iloc[index].cnmf.get_output_path()
+        path.unlink()
+
+        # save to disk
+        self._cnmf_obj.save(str(path))
+
+        # clear the cache
+        cnmf_cache.clear_cache()
+
         print("Overwrote CNMF object with new eval")
+
+    def _manual_toggle_component(self, ev):
+        if not hasattr(ev, "key"):
+            return
+
+        if ev.key == "a":
+            if self.component_index in self._cnmf_obj.estimates.idx_components:
+                # component already in good
+                return
+            # else swap it from bad and put into good
+
+            # remove from bad
+            self._cnmf_obj.estimates.idx_components_bad = np.delete(
+                self._cnmf_obj.estimates.idx_components_bad,
+                self._cnmf_obj.estimates.idx_components_bad == self.component_index
+            )
+
+            # put index into good
+            self._cnmf_obj.estimates.idx_components = np.sort(np.concatenate([
+                self._cnmf_obj.estimates.idx_components,
+                [self.component_index]
+            ]))
+
+        elif ev.key == "r":
+            if self.component_index in self._cnmf_obj.estimates.idx_components_bad:
+                # component already in bad
+                return
+            # else swap it from bad and put into good
+
+            # remove from good
+            self._cnmf_obj.estimates.idx_components = np.delete(
+                self._cnmf_obj.estimates.idx_components,
+                self._cnmf_obj.estimates.idx_components == self.component_index
+            )
+
+            # put index into bad
+            self._cnmf_obj.estimates.idx_components_bad = np.sort(np.concatenate([
+                self._cnmf_obj.estimates.idx_components_bad,
+                [self.component_index]
+            ]))
+
+        # set the colors
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
 
     def show(self, sidecar: bool = False):
         """
