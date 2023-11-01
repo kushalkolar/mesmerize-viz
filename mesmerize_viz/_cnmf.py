@@ -14,6 +14,7 @@ from fastplotlib.utils import get_cmap
 from caiman.source_extraction.cnmf import CNMF
 
 from mesmerize_core.caiman_extensions.cnmf import cnmf_cache
+from mesmerize_core import CNMFExtensions
 
 
 from ._utils import DummyMovie, format_params
@@ -317,13 +318,8 @@ class CNMFVizContainer:
 
             if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
 
-        reset_timepoint_on_change: bool
-
-        temporal_postprocess: optional, list of str or callable
-
-        heatmap_postprocess: str, None, callable
-            if str: one of "norm", "dfof", "zscore"
-            Or a callable to postprocess using your own function
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
 
         temporal_kwargs: dict
             kwargs passed to cnmf.get_temporal(), example: {"add_residuals" : True}.
@@ -331,6 +327,11 @@ class CNMFVizContainer:
 
         input_movie_kwargs: dict
             kwargs passed to caiman.get_input()
+
+        image_widget_kwargs: dict
+            kwargs passed to ImageWidget
+
+            Example: `image_widget_kwargs={"cmap": "viridis"}`
 
         data_grid_kwargs
         """
@@ -384,7 +385,6 @@ class CNMFVizContainer:
             raise ValueError(
                 "The kwarg `component_indices` is not allowed here."
             )
-            self._set_params_text_area(index)
 
         self.reset_timepoint_on_change = reset_timepoint_on_change
         self.input_movie_kwargs = input_movie_kwargs
@@ -697,7 +697,11 @@ class CNMFVizContainer:
 
         else:
             # image widget doesn't need clear, we can just use set_data
-            self._image_widget.set_data(data_arrays["images"])
+            self._image_widget.set_data(
+                data_arrays["images"],
+                reset_indices=self.reset_timepoint_on_change,
+                reset_vmin_vmax=True
+            )
             for subplot in self._image_widget.gridplot:
                 if "contours" in subplot:
                     # delete the contour graphics
@@ -805,7 +809,6 @@ class CNMFVizContainer:
                    f"cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} ")
 
         self._component_metrics_text.value = metrics
-
 
     def _zoom_into_component(self, index: int):
         if not self.checkbox_zoom_components.value:
@@ -1043,3 +1046,100 @@ class CNMFVizContainer:
         plots = HBox([temporals, iw_contour_controls])
 
         return VBox([self._top_widget, plots])
+
+
+@pd.api.extensions.register_dataframe_accessor("cnmf")
+class CNMFDataFrameVizExtension:
+    def __init__(self, df):
+        self._dataframe = df
+
+    def viz(
+        self,
+        start_index: int = None,
+        temporal_data_option: str = None,
+        image_data_options: list[str] = None,
+        temporal_kwargs: dict = None,
+        reset_timepoint_on_change: bool = False,
+        input_movie_kwargs: dict = None,
+        image_widget_kwargs: dict = None,
+        data_grid_kwargs: dict = None,
+    ):
+        """
+        Visualize CNMF output and other data columns such as behavior video (optional).
+
+        Note: If using dfof temporal_data_option, you must have already run dfof.
+
+        Parameters
+        ----------
+        dataframe: pd.DataFrame
+
+        start_index: int
+
+        temporal_data_option: optional, str
+            if not provided or ``None`: uses cnmf.get_temporal()
+
+            if zscore: uses zscore of cnmf.get_temporal()
+
+            if norm: uses 0-1 normalized output of cnmf.get_temporal()
+
+            if dfof: uses cnmf.get_dfof()
+
+            if dfof-zscore: uses cnmf.get_dfof() and then zscores
+
+            if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
+
+        image_data_options: list of str
+            default: ["input", "rcm", "rcb", "residuals"]
+
+            Valid options:
+
+            +------------------+-----------------------------------------+
+            |      option      | description                             |
+            +------------------+-----------------------------------------+
+            | "input"          | input movie                             |
+            | "rcm"            | reconstructed movie, A * C              |
+            | "rcb"            | reconstructed background, b * f         |
+            | "residuals"      | residuals, input - (A * C) - (b * f)    |
+            | "rcm-mean"       | rcm mean projection image               |
+            | "rcm-min"        | rcm min projection image                |
+            | "rcm-max"        | rcm max projection image                |
+            | "rcm-std"        | rcm standard deviation projection image |
+            | "rcb-mean"       | rcb mean projection image               |
+            | "rcb-min"        | rcb min projection image                |
+            | "rcb-max"        | rcb max projection image                |
+            | "rcb-std"        | rcb standard deviation projection image |
+            | "mean"           | mean projection image                   |
+            | "max"            | max projection image                    |
+            | "std"            | standard deviation projection image     |
+            +------------------+-----------------------------------------+
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
+
+        temporal_kwargs: dict
+            kwargs passed to cnmf.get_temporal(), example: {"add_residuals" : True}.
+            Ignored if temporal_data_option contains "dfof"
+
+        input_movie_kwargs: dict
+            kwargs passed to caiman.get_input()
+
+        image_widget_kwargs: dict
+            kwargs passed to ImageWidget
+
+            Example: `image_widget_kwargs={"cmap": "viridis"}`
+        """
+
+        container = CNMFVizContainer(
+            dataframe=self._dataframe,
+            start_index=start_index,
+            temporal_data_option=temporal_data_option,
+            image_data_options=image_data_options,
+            temporal_kwargs=temporal_kwargs,
+            reset_timepoint_on_change=reset_timepoint_on_change,
+            input_movie_kwargs=input_movie_kwargs,
+            image_widget_kwargs=image_widget_kwargs,
+            data_grid_kwargs=data_grid_kwargs,
+
+        )
+
+        return container
