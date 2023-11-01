@@ -6,7 +6,7 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, Layout, HBox, VBox
+from ipywidgets import Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 import fastplotlib as fpl
 
@@ -317,6 +317,36 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+        self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
+        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1)
+        for trait in ["value", "max"]:
+            jslink((self.component_slider, trait), (self.component_int_box, trait))
+
+        self.component_int_box.observe(
+            lambda change: self.set_component_index(change["new"]), "value"
+        )
+
+        self.checkbox_zoom_components = Checkbox(
+            value=True,
+            description="auto-zoom component",
+            description_tooltip="If checked, zoom into selected component"
+        )
+
+        self.zoom_components_scale = FloatSlider(
+            min=0.25,
+            max=3,
+            value=1,
+            step=0.25,
+            description="zoom scale",
+            description_tooltip="zoom scale as a factor of component width/height"
+        )
+
+        self._top_widget = VBox([
+            HBox([self.datagrid, self.params_text_area]),
+            HBox([self.component_slider, self.component_int_box]),
+            HBox([self.checkbox_zoom_components, self.zoom_components_scale])
+        ])
+
         self._plot_temporal = fpl.Plot()
         self._plot_temporal.camera.maintain_aspect = False
         self._plot_heatmap = fpl.Plot()
@@ -403,10 +433,10 @@ class CNMFVizContainer:
     def _set_data(self, data_arrays: Dict[str, np.ndarray]):
         self._contour_graphics.clear()
 
+        self._synchronizer.clear()
+
         self._plot_temporal.clear()
         self._plot_heatmap.clear()
-
-        self._synchronizer.clear()
 
         if self._image_widget is None:
             self._image_widget = fpl.ImageWidget(
@@ -419,13 +449,23 @@ class CNMFVizContainer:
             self._image_widget.show()
 
         else:
+            # image widget doesn't need clear, we can just use set_data
             self._image_widget.set_data(data_arrays["images"])
+            for subplot in self._image_widget.gridplot:
+                if "contours" in subplot:
+                    # delete the contour graphics
+                    subplot.delete_graphic(subplot["contours"])
 
         self._temporal_data = data_arrays["temporal"]
 
         # make temporal graphics
         self._plot_temporal.add_line(self._temporal_data[0], name="line")
+        # autoscale the single temporal line plot when the data changes
+        self._plot_temporal["line"].data.add_event_handler(self._plot_temporal.auto_scale)
         self._plot_heatmap.add_heatmap(self._temporal_data, name="heatmap")
+
+        self._component_linear_selector: fpl.LinearSelector = self._plot_heatmap["heatmap"].add_linear_selector(axis="y", thickness=5)
+        self._component_linear_selector.selection.add_event_handler(self.set_component_index)
 
         # linear selectors and events
         self._linear_selector_temporal: fpl.LinearSelector = self._plot_temporal["line"].add_linear_selector()
@@ -488,16 +528,41 @@ class CNMFVizContainer:
         ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
 
         self.set_component_index(ix)
-        #
-        # self.component_int_box.value = ix
+
+        self.component_int_box.value = ix
 
         return None
 
-    def set_component_index(self, ix):
-        for g in self._contour_graphics:
-            g.set_feature(feature="colors", new_data="w", indices=ix)
+    def set_component_index(self, index):
+        if hasattr(index, "pick_info"):
+            # came from heatmap component selector
+            if index.pick_info["pygfx_event"] is None:
+                # this means that the selector was not triggered by the user but that it moved due to another event
+                # so then we don't set_component_index because then infinite recursion
+                return
+            index = index.pick_info["selected_index"]
 
-        self._plot_temporal["line"].data = self._temporal_data[ix]
+        for g in self._contour_graphics:
+            g.set_feature(feature="colors", new_data="w", indices=index)
+
+        self._plot_temporal["line"].data = self._temporal_data[index]
+
+        if self._component_linear_selector._move_info is None:
+            # TODO: Very hacky for now, ignores if the slider is currently being moved by the user
+            # prevents weird slider movement
+            self._component_linear_selector.selection = index
+
+        self._zoom_into_component(index)
+
+    def _zoom_into_component(self, index: int):
+        if not self.checkbox_zoom_components.value:
+            return
+
+        for subplot in self._image_widget.gridplot:
+            subplot.camera.show_object(
+                subplot["contours"].graphics[index].world_object,
+                scale=self.zoom_components_scale.value
+            )
 
     def _set_frame_index_from_linear_selector(self, ev):
         # TODO: hacky mess, need to make ImageWidget emit events
@@ -529,10 +594,8 @@ class CNMFVizContainer:
 
         """
 
-        datagrid_params = HBox([self.datagrid, self.params_text_area])
-
         temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
 
         plots = HBox([temporals, self._image_widget.widget])
 
-        return VBox([datagrid_params, plots])
+        return VBox([self._top_widget, plots])
