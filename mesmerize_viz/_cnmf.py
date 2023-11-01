@@ -610,7 +610,11 @@ class CNMFVizContainer:
 
         self._zoom_into_component(index)
 
+        self.component_int_box.unobserve_all()
         self.component_int_box.value = index
+        self.component_int_box.observe(
+            lambda change: self.set_component_index(change["new"]), "value"
+        )
 
         metrics = (f"snr: {self._cnmf_obj.estimates.SNR_comp[index]:.02f}, "
                    f"r_values: {self._cnmf_obj.estimates.r_values[index]:.02f}, "
