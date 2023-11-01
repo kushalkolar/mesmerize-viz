@@ -3,10 +3,9 @@ from pathlib import Path
 
 
 install_requires = [
-    "mesmerize-core",
-    "fastplotlib",
-    "ipydatagrid"
-
+    "fastplotlib[notebook]>=v0.1.0.a14",
+    "ipydatagrid",
+    "tslearn",
 ]
 
 

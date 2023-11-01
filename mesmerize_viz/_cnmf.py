@@ -1,31 +1,26 @@
-from typing import *
+from collections import OrderedDict
 from functools import partial
-import math
-import itertools
+from typing import *
 from warnings import warn
 
-import ipywidgets
+
 import numpy as np
 import pandas as pd
-
-from mesmerize_core.arrays._base import LazyArray
-from mesmerize_core.utils import quick_min_max
-
-from fastplotlib import ImageWidget, GridPlot, graphics
-from fastplotlib.graphics.selectors import LinearSelector, Synchronizer
-from fastplotlib.utils import calculate_gridshape
-
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, VBox, HBox, Layout, Checkbox, IntSlider, BoundedIntText, jslink
+from ipywidgets import Button, Tab, Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, BoundedFloatText, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
+import fastplotlib as fpl
+from fastplotlib.utils import get_cmap
+from caiman.source_extraction.cnmf import CNMF
+from IPython.display import display
+from sidecar import Sidecar
 
-from ._utils import ZeroArray, format_params
+from mesmerize_core.caiman_extensions.cnmf import cnmf_cache
+from mesmerize_core import CNMFExtensions
 
 
-# basic data options
-VALID_DATA_OPTIONS = [
-    "contours",
-    "empty"
-]
+from ._utils import DummyMovie, format_params
+
 
 IMAGE_OPTIONS = [
     "input",
@@ -36,43 +31,39 @@ IMAGE_OPTIONS = [
     "pnr",
 ]
 
-VALID_DATA_OPTIONS += IMAGE_OPTIONS
-
-
-TEMPORAL_OPTIONS = [
-    "temporal",
-    "temporal-stack",
-    "heatmap",
-]
-
-VALID_DATA_OPTIONS += TEMPORAL_OPTIONS
-
-# RCM and RCB projections
 rcm_rcb_proj_options = list()
-
+# RCM and RCB projections
 for option in ["rcm", "rcb"]:
     for proj in ["mean", "min", "max", "std"]:
         rcm_rcb_proj_options.append(f"{option}-{proj}")
 
-VALID_DATA_OPTIONS += rcm_rcb_proj_options
+
 IMAGE_OPTIONS += rcm_rcb_proj_options
 
-
-projs = [
+PROJS = [
     "mean",
     "max",
     "std",
 ]
 
-IMAGE_OPTIONS += projs
-
-VALID_DATA_OPTIONS += projs
+IMAGE_OPTIONS += PROJS
 
 
 class ExtensionCallWrapper:
-    def __init__(self, extension_func: callable, kwargs: dict = None, attr: str = None):
+    def __init__(
+            self,
+            extension_func: callable,
+            kwargs: dict = None,
+            attr: str = None,
+            post_process_func: callable = None,
+    ):
         """
-        Basically like ``functools.partial`` but supports kwargs.
+        Basically a very fancy ``functools.partial``.
+
+        In addition to behaving like ``functools.partial``, it supports:
+            - kwargs
+            - returning attributes of the return value from the callable
+            - postprocessing the return value
 
         Parameters
         ----------
@@ -82,9 +73,12 @@ class ExtensionCallWrapper:
         kwargs: dict
             kwargs to pass to the extension function when it is called
 
-        attr: str, optional
+        attr: str, optionalself, extension_func: callable, kwargs: dict = None, attr: str = None
             return an attribute of the callable's output instead of the return value of the callable.
             Example: if using rcm, can set ``attr="max_image"`` to return the max proj of the RCM.
+
+        post_process_func: callable
+            A function to postprocess before returning, such as zscore, etc.
         """
 
         if kwargs is None:
@@ -94,6 +88,7 @@ class ExtensionCallWrapper:
 
         self.func = extension_func
         self.attr = attr
+        self.post_process_func = post_process_func
 
     def __call__(self, *args, **kwargs):
         rval = self.func(**self.kwargs)
@@ -101,606 +96,300 @@ class ExtensionCallWrapper:
         if self.attr is not None:
             return getattr(rval, self.attr)
 
+        if self.post_process_func is not None:
+            return self.post_process_func(rval)
+
         return rval
 
 
-def get_cnmf_data_mapping(series: pd.Series, data_kwargs: dict = None, other_data_loaders: dict = None) -> dict:
-    """
-    Returns dict that maps data option str to a callable that can return the corresponding data array.
-
-    For example, ``{"input": series.get_input_movie}`` maps "input" -> series.get_input_movie
-
-    Parameters
-    ----------
-    series: pd.Series
-        row/item to get mapping from
-
-    data_kwargs: dict, optional
-        optional kwargs for each of the extension functions
-
-    other_data_loaders: dict
-        {"data_option": callable}, example {"behavior": LazyVideo}
-
-    Returns
-    -------
-    dict
-        {data label: callable}
-    """
-    if data_kwargs is None:
-        data_kwargs = dict()
-
-    if other_data_loaders is None:
-        other_data_loaders = dict()
-
-    default_extension_kwargs = {k: dict() for k in VALID_DATA_OPTIONS + list(other_data_loaders.keys())}
-
-    default_extension_kwargs["contours"] = {"swap_dim": False}
-
-    ext_kwargs = {
-        **default_extension_kwargs,
-        **data_kwargs
-    }
-
-    projections = {k: partial(series.caiman.get_projection, k) for k in projs}
-
-    other_data_loaders_mapping = dict()
-
-    # make ExtensionCallWrapers for other data loaders
-    for option in list(other_data_loaders.keys()):
-        other_data_loaders_mapping[option] = ExtensionCallWrapper(other_data_loaders[option], ext_kwargs[option])
+def get_cnmf_data_mapping(
+        series: pd.Series,
+        input_movie_kwargs: dict,
+        temporal_kwargs: dict,
+):
+    projections = {k: partial(series.caiman.get_projection, k) for k in PROJS}
 
     rcm_rcb_projs = dict()
     for proj in ["mean", "min", "max", "std"]:
         rcm_rcb_projs[f"rcm-{proj}"] = ExtensionCallWrapper(
             series.cnmf.get_rcm,
-            ext_kwargs["rcm"],
             attr=f"{proj}_image"
         )
 
+    zscore_func = TimeSeriesScalerMeanVariance().fit_transform
+    norm_func = TimeSeriesScalerMinMax().fit_transform
+
     temporal_mappings = {
-        k: ExtensionCallWrapper(series.cnmf.get_temporal, ext_kwargs[k]) for k in TEMPORAL_OPTIONS
+        "temporal": ExtensionCallWrapper(series.cnmf.get_temporal, temporal_kwargs),
+        "zscore": ExtensionCallWrapper(series.cnmf.get_temporal, temporal_kwargs, post_process_func=zscore_func),
+        "norm": ExtensionCallWrapper(series.cnmf.get_temporal, temporal_kwargs, post_process_func=norm_func),
+        "dfof": partial(series.cnmf.get_detrend_dfof),
+        "dfof-zscore": ExtensionCallWrapper(series.cnmf.get_detrend_dfof, post_process_func=zscore_func),
+        "dfof-norm": ExtensionCallWrapper(series.cnmf.get_detrend_dfof, post_process_func=zscore_func)
     }
 
-    m = {
-        "input": ExtensionCallWrapper(series.caiman.get_input_movie, ext_kwargs["input"]),
-        "rcm": ExtensionCallWrapper(series.cnmf.get_rcm, ext_kwargs["rcm"]),
-        "rcb": ExtensionCallWrapper(series.cnmf.get_rcb, ext_kwargs["rcb"]),
-        "residuals": ExtensionCallWrapper(series.cnmf.get_residuals, ext_kwargs["residuals"]),
-        "corr": ExtensionCallWrapper(series.caiman.get_corr_image, ext_kwargs["corr"]),
-        "contours": ExtensionCallWrapper(series.cnmf.get_contours, ext_kwargs["contours"]),
-        "empty": ZeroArray,
-        **temporal_mappings,
+    mapping = {
+        "cnmf_obj": series.cnmf.get_output,
+        "input": ExtensionCallWrapper(series.caiman.get_input_movie, input_movie_kwargs),
+        "rcm": series.cnmf.get_rcm,
+        "rcb": series.cnmf.get_rcb,
+        "residuals": series.cnmf.get_residuals,
+        "corr": series.caiman.get_corr_image,
+        "pnr": series.caiman.get_pnr_image,
+        "contours": ExtensionCallWrapper(series.cnmf.get_contours, {"swap_dim": False}),
         **projections,
         **rcm_rcb_projs,
-        **other_data_loaders_mapping
+        **temporal_mappings,
     }
 
-    return m
+    return mapping
 
 
-# TODO: maybe this can be used so that ImageWidget can be used for both behavior and calcium
-# TODO: but then we need an option to set window_funcs separately for each subplot
-class TimeArray(LazyArray):
-    """
-    Wrapper for array-like that takes units of millisecond for slicing
-    """
-    def __init__(self, array: Union[np.ndarray, LazyArray], timestamps = None, framerate = None):
-        """
-        Arrays which can be sliced using timepoints in units of millisecond.
-        Supports slicing with start and stop timepoints, does not support slice steps.
+class EvalController:
+    def __init__(self):
+        self._float_metrics = [
+            "min_SNR",
+            "SNR_lowest",
+            "rval_thr",
+            "rval_lowest",
+            "min_cnn_thr",
+            "cnn_lowest",
 
-        i.e. You can do this: time_array[30], time_array[30:], time_array[:50], time_array[30:50].
-        You cannot do this: time_array[::10], time_array[0::10], time_array[0:50:10]
-
-        Parameters
-        ----------
-        array: array-like
-            data array, must have shape attribute and first dimension must be frame index
-
-        timestamps: np.ndarray, 1 dimensional
-            timestamps in units of millisecond, you must provide either timestamps or framerate.
-            MUST be in order such that t_(n +1) > t_n for all n.
-
-        framerate: float
-            framerate, in units of Hz (per second). You must provide either timestamps or framerate
-        """
-        self._array = array
-
-        if timestamps is None and framerate is None:
-            raise ValueError("Must provide timestamps or framerate")
-
-        if timestamps is None:
-            # total duration in milliseconds = n_frames / framerate
-            n_frames = self.shape[0]
-            stop_time_ms = (n_frames / framerate) * 1000
-            timestamps = np.linspace(
-                start=0,
-                stop=stop_time_ms,
-                num=n_frames,
-                endpoint=False
-            )
-
-        if timestamps.size != self._array.shape[0]:
-            raise ValueError("timestamps.size != array.shape[0]")
-
-        self.timestamps = timestamps
-
-    def _get_closest_index(self, timepoint: float):
-        """
-        from: https://stackoverflow.com/a/26026189/4697983
-
-        This is very fast, 10 microseconds even for a
-
-        Parameters
-        ----------
-        timepoint: float
-            timepoint in milliseconds
-
-        Returns
-        -------
-        int
-            index for the closest timestamp, which also corresponds to the frame index of the data array
-        """
-        value = timepoint
-        array = self.timestamps
-
-        idx = np.searchsorted(array, value, side="left")
-        if idx > 0 and (idx == len(array) or math.fabs(value - array[idx - 1]) < math.fabs(value - array[idx])):
-            return idx - 1
-        else:
-            return idx
-
-    # override __getitem__ since it will not work with LazyArray base implementation since:
-    # 1. base implementation requires the slice indices to be less than shape[0]
-    # 2. base implementation does not consider slicing with float values
-    def __getitem__(self, indices: Union[slice, int, float]) -> np.ndarray:
-        if isinstance(indices, slice):
-            if indices.step is not None:
-                raise IndexError(
-                    "TimeArray slicing does not support step, only start and stop. See docstring."
-                )
-
-            if indices.start is None:
-                start = 0
-            else:
-                start = self._get_closest_index(indices.start)
-
-            if indices.stop is None:
-                stop = self.n_frames
-            else:
-                stop = self._get_closest_index(indices.stop)
-
-            s = slice(start, stop)
-            return self._array[s]
-
-        # single index
-        index = self._get_closest_index(indices)
-        return self._array[index]
-
-    def _compute_at_indices(self, indices: Union[int, slice]) -> np.ndarray:
-        """not implemented here"""
-        pass
-
-    @property
-    def n_frames(self) -> int:
-        return self.shape[0]
-
-    @property
-    def shape(self) -> Tuple[int, int, int]:
-        return self._array.shape
-
-    @property
-    def dtype(self) -> str:
-        return str(self._array.dtype)
-
-    @property
-    def min(self) -> float:
-        if isinstance(self._array, LazyArray):
-            return self._array.min
-        else:
-            return quick_min_max(self._array)[0]
-
-    @property
-    def max(self) -> float:
-        if isinstance(self._array, LazyArray):
-            return self._array.max
-        else:
-            return quick_min_max(self._array)[1]
-
-
-class GridPlotWrapper:
-    """Wraps GridPlot in a way that allows updating the data"""
-
-    def __init__(
-            self,
-            data: Union[List[str], List[List[str]]],
-            data_mapping: Dict[str, ExtensionCallWrapper],
-            reset_timepoint_on_change: bool = False,
-            data_graphic_kwargs: dict = None,
-            # slider_ipywidget: ipywidgets.IntSlider = None,
-            gridplot_kwargs: dict = None,
-            cmap: str = "gnuplot2",
-            component_colors: str = "random"
-    ):
-        """
-        Visualize motion correction output.
-
-        Parameters
-        ----------
-        data: list of str or list of list of str
-            list of data to plot, examples: ["input", "temporal-stack"], [["temporal"], ["rcm", "rcb"]]
-
-        data_mapping: dict
-            maps {"data_option": callable}
-
-        reset_timepoint_on_change: bool, default False
-            reset the timepoint in the ImageWidget when changing items/rows
-
-        data_graphic_kwargs: dict
-            passed add_<graphic> for corresponding graphic
-
-        slider_ipywidget: ipywidgets.IntSlider
-            time slider from ImageWidget
-
-        gridplot_kwargs: dict, optional
-            kwargs passed to GridPlot
-
-        """
-
-        self._data = data
-
-        if data_graphic_kwargs is None:
-            data_graphic_kwargs = dict()
-
-        self.data_graphic_kwargs = data_graphic_kwargs
-
-        if gridplot_kwargs is None:
-            gridplot_kwargs = dict()
-
-        self._cmap = cmap
-
-        self.component_colors = component_colors
-
-        # self._slider_ipywidget = slider_ipywidget
-
-        self.reset_timepoint_on_change = reset_timepoint_on_change
-
-        self.gridplots: List[GridPlot] = list()
-
-        self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
-        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1)
-        for trait in ["value", "max"]:
-            jslink((self.component_slider, trait), (self.component_int_box, trait))
-
-        self.component_int_box.observe(self.set_component_index, "value")
-
-        # gridplot for each sublist
-        for sub_data in self._data:
-            _gridplot_kwargs = {"shape": calculate_gridshape(len(sub_data))}
-            _gridplot_kwargs.update(gridplot_kwargs)
-            self.gridplots.append(GridPlot(**_gridplot_kwargs))
-
-        self.temporal_graphics: List[graphics.LineCollection] = list()
-        self.temporal_stack_graphics: List[graphics.LineStack] = list()
-        self.heatmap_graphics: List[graphics.HeatmapGraphic] = list()
-        self.image_graphics: List[graphics.ImageGraphic] = list()
-        self.contour_graphics: List[graphics.LineCollection] = list()
-
-        self._managed_graphics: List[list] = [
-            self.temporal_graphics,
-            self.temporal_stack_graphics,
-            self.image_graphics,
-            self.contour_graphics
         ]
 
-        # to store only image data in a 1:1 mapping to the graphics list
-        self.image_graphic_arrays: List[np.ndarray] = list()
+        # caiman is really annoying with this
+        # maps eval metric to the estimates attrs
+        self._metric_array_mapping = {
+            "min_SNR": "SNR_comp",
+            "SNR_lowest": "SNR_comp",
+            "rval_thr": "r_values",
+            "rval_lowest": "r_values",
+            "min_cnn_thr": "cnn_preds",
+            "cnn_lowest": "cnn_preds",
+        }
 
-        self.linear_selectors: List[LinearSelector] = list()
+        self._widgets = OrderedDict()
 
-        self._current_frame_index: int = 0
+        param_entries = list()
 
-        self.change_data(data_mapping)
-
-    def set_component_index(self, change):
-        index = change["new"]
-
-        for g in self.contour_graphics:
-            g._set_feature(feature="colors", new_data="w", indices=index)
-
-    def _parse_data(self, data_options, data_mapping) -> List[List[np.ndarray]]:
-        """
-        Returns nested list of array-like
-        """
-        data_arrays = list()
-
-        for d in data_options:
-            if isinstance(d, list):
-                data_arrays.append(self._parse_data(d, data_mapping))
-
-            elif d == "empty":
-                data_arrays.append(None)
-
-            else:
-                func = data_mapping[d]
-                a = func()
-                data_arrays.append(a)
-
-        return data_arrays
-
-    @property
-    def cmap(self) -> str:
-        return self._cmap
-
-    @cmap.setter
-    def cmap(self, cmap: str):
-        for g in self.image_graphics:
-            g.cmap = cmap
-
-    # @property
-    # def component_colors(self) -> Any:
-    #     pass
-    #
-    # @component_colors.setter
-    # def component_colors(self, colors: Any):
-    #     for collection in self.contour_graphics:
-    #         for g in collection.graphics:
-    #
-
-    def change_data(self, data_mapping: Dict[str, callable]):
-        for l in self._managed_graphics:
-            l.clear()
-
-        self.image_graphic_arrays.clear()
-
-        # clear existing subplots
-        for gp in self.gridplots:
-            gp.clear()
-
-        # new data arrays
-        data_arrays = self._parse_data(data_options=self._data, data_mapping=data_mapping)
-
-        # rval is (contours, centeres of masses)
-        contours = data_mapping["contours"]()[0]
-
-        if self.component_colors == "random":
-            n_components = len(contours)
-            component_colors = np.random.rand(n_components, 4).astype(np.float32)
-            component_colors[:, -1] = 1
-        else:
-            component_colors = self.component_colors
-
-        self.component_slider.value = 0
-        self.component_slider.max = len(contours)
-
-        # change data for all gridplots
-        for sub_data, sub_data_arrays, gridplot in zip(self._data, data_arrays, self.gridplots):
-            self._change_data_gridplot(sub_data, sub_data_arrays, gridplot, contours, component_colors)
-
-        # connect events
-        self._connect_events()
-
-    def _change_data_gridplot(
-            self,
-            data: List[str],
-            data_arrays: List[np.ndarray],
-            gridplot: GridPlot,
-            contours,
-            component_colors
-    ):
-
-        if self.reset_timepoint_on_change:
-            self._current_frame_index = 0
-
-        for data_option, data_array, subplot in zip(data, data_arrays, gridplot):
-            if data_option in self.data_graphic_kwargs.keys():
-                graphic_kwargs = self.data_graphic_kwargs[data_option]
-            else:
-                graphic_kwargs = dict()
-            # skip
-            if data_option == "empty":
-                continue
-
-            elif data_option == "temporal":
-                current_graphic = subplot.add_line_collection(
-                    data_array,
-                    colors=component_colors,
-                    name="components",
-                    **graphic_kwargs
-                )
-                current_graphic[:].present.add_event_handler(subplot.auto_scale)
-                self.temporal_graphics.append(current_graphic)
-
-                # otherwise the plot has nothing in it which causes issues
-                subplot.add_line(np.random.rand(data_array.shape[1]), colors=(0, 0, 0, 0), name="pseudo-line")
-
-            elif data_option == "temporal-stack":
-                current_graphic = subplot.add_line_stack(
-                    data_array,
-                    colors=component_colors,
-                    name="components",
-                    **graphic_kwargs
-                )
-                self.temporal_stack_graphics.append(current_graphic)
-
-            elif data_option == "heatmap":
-                current_graphic = subplot.add_heatmap(
-                    data_array,
-                    colors=component_colors,
-                    name="components",
-                    **graphic_kwargs
-                )
-                self.heatmap_graphics.append(current_graphic)
-
-            else:
-                img_graphic = subplot.add_image(
-                    data_array[self._current_frame_index],
-                    cmap=self.cmap,
-                    name="image",
-                    **graphic_kwargs
-                )
-
-                self.image_graphics.append(img_graphic)
-                self.image_graphic_arrays.append(data_array)
-
-                contour_graphic = subplot.add_line_collection(
-                    contours,
-                    colors=component_colors,
-                    name="contours"
-                )
-
-                self.contour_graphics.append(contour_graphic)
-
-            subplot.name = data_option
-
-            if data_option in TEMPORAL_OPTIONS:
-                self.linear_selectors.append(current_graphic.add_linear_selector())
-                subplot.camera.maintain_aspect = False
-
-        if len(self.linear_selectors) > 0:
-            self._synchronizer = Synchronizer(
-                *self.linear_selectors, key_bind=None
+        for metric in self._float_metrics:
+            slider = FloatSlider(value=0, min=0, max=1, step=0.01, description=metric)
+            spinbox = BoundedFloatText(
+                value=0, min=0, max=1, step=0.01,
+                description_tooltip=metric, layout=Layout(width="70px"), readout_format='.2f',
             )
 
-        for ls in self.linear_selectors:
-            ls.selection.add_event_handler(self.set_frame_index)
+            slider.observe(self._call_handlers, "value")
+            spinbox.observe(self._call_handlers, "value")
 
-    def _euclidean(self, source, target, event, new_data):
-        """maps click events to contour"""
-        # calculate coms of line collection
-        indices = np.array(event.pick_info["index"])
+            jslink((slider, "value"), (spinbox, "value"))
 
-        coms = list()
+            param_entries.append(HBox([spinbox, slider]))
 
-        for contour in target.graphics:
-            coors = contour.data()[~np.isnan(contour.data()).any(axis=1)]
-            com = coors.mean(axis=0)
-            coms.append(com)
+            # keep this so it's easier to modify in set_limits
+            self._widgets[metric] = {"slider": slider, "spinbox": spinbox}
 
-        # euclidean distance to find closest index of com
-        indices = np.append(indices, [0])
+        self.use_cnn_checkbox = Checkbox(
+            value=True,
+            description="use_cnn",
+            description_tooltip="use CNN classifier"
+        )
 
-        ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
+        self._handlers = list()
 
-        target._set_feature(feature="colors", new_data=new_data, indices=ix)
+        # limits must be set first before it's usable
+        self._block_handlers = True
 
-        self.component_int_box.value = ix
+        self.button_save_eval = Button(
+            description="Save Eval to disk",
+        )
 
-        return None
+        self.button_reset_eval = Button(
+            description="Reset Eval Params",
+            description_tooltip="Reset eval from disk"
+        )
 
-    def _connect_events(self):
-        for image_graphic, contour_graphic in zip(self.image_graphics, self.contour_graphics):
-            image_graphic.link(
-                "click",
-                target=contour_graphic,
-                feature="colors",
-                new_data="w",
-                callback=self._euclidean
-            )
+        buttons = HBox([self.button_save_eval, self.button_reset_eval])
 
-            contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=5)
+        self.widget = VBox([*param_entries, self.use_cnn_checkbox, buttons])
 
-            for temporal_graphic in self.temporal_graphics:
-                contour_graphic.link("colors", target=temporal_graphic, feature="present", new_data=True)
+    def set_limits(self, cnmf_obj: CNMF):
+        self._block_handlers = True
+        for metric in self._float_metrics:
+            metric_array = getattr(cnmf_obj.estimates, self._metric_array_mapping[metric])
+            for kind in ["slider", "spinbox"]:
+                # allow 100 steps
+                self._widgets[metric][kind].step = np.ptp(metric_array) / 100
+                self._widgets[metric][kind].min = metric_array.min()
+                self._widgets[metric][kind].max = metric_array.max()
+                self._widgets[metric][kind].value = cnmf_obj.params.get_group("quality")[metric]
 
-    def set_frame_index(self, ev):
-        # 0 because this will return the same number repeated * n_components
-        index = ev.pick_info["selected_index"][0]
-        for image_graphic, full_array in zip(self.image_graphics, self.image_graphic_arrays):
-            # txy data
-            if full_array.ndim > 2:
-                image_graphic.data = full_array[index]
+        self.use_cnn_checkbox.value = cnmf_obj.params.get_group("quality")["use_cnn"]
 
-        self._current_frame_index = index
+        self._block_handlers = False
+
+    def get_data(self):
+        data = dict()
+        for metric in self._float_metrics:
+            data[metric] = self._widgets[metric]["spinbox"].value
+
+        data["use_cnn"] = self.use_cnn_checkbox.value
+
+        return data
+
+    def add_handler(self, func: callable):
+        """Handlers must accept a dict argument, the dict has the eval params"""
+        self._handlers.append(func)
+
+    def _call_handlers(self, obj):
+        if self._block_handlers:
+            return
+
+        data = self.get_data()
+        for handler in self._handlers:
+            handler(data)
+
+    def remove_handler(self, func: callable):
+        self._handlers.remove(func)
+
+    def clear_handlers(self):
+        self._handlers.clear()
 
 
-# TODO: This use a GridPlot that's manually managed because the timescales of calcium ad behavior won't match
 class CNMFVizContainer:
     """Widget that contains the DataGrid, params text box fastplotlib GridPlot, etc"""
 
+    @property
+    def component_index(self) -> int:
+        """Current component index"""
+        return self._component_index
+
+    @property
+    def plot_temporal(self) -> fpl.Plot:
+        """Plot with the single temporal trace"""
+        return self._plot_temporal
+
+    @property
+    def plot_heatmap(self) -> fpl.Plot:
+        """Plot with the heatmap"""
+        return self._plot_heatmap
+
+    @property
+    def image_widget(self) -> fpl.ImageWidget:
+        """ImageWidget"""
+        return self._image_widget
+
+    @property
+    def cnmf_obj(self) -> CNMF:
+        """Current CNMF object displayed in the viewer, use with care"""
+        return self._cnmf_obj
+
     def __init__(
         self,
-            dataframe: pd.DataFrame,
-            data: List[str] = None,
-            start_index: int = 0,
-            reset_timepoint_on_change: bool = False,
-            data_graphic_kwargs: dict = None,
-            gridplot_kwargs: dict = None,
-            cmap: str = "gnuplot2",
-            component_colors: str = "random",
-            calcium_framerate: float = None,
-            other_data_loaders: Dict[str, callable] = None,
-            data_kwargs: dict = None,
-            data_grid_kwargs: dict = None,
+        dataframe: pd.DataFrame,
+        start_index: int = None,
+        temporal_data_option: str = None,
+        image_data_options: list[str] = None,
+        temporal_kwargs: dict = None,
+        reset_timepoint_on_change: bool = False,
+        input_movie_kwargs: dict = None,
+        image_widget_kwargs=None,
+        data_grid_kwargs: dict = None,
     ):
         """
-        Visualize CNMF output and other data columns such as behavior video (optional)
+        Visualize CNMF output and other data columns such as behavior video (optional).
+
+        Note: If using dfof temporal_data_option, you must have already run dfof.
 
         Parameters
         ----------
         dataframe: pd.DataFrame
 
-        data: list of str
-            data options, such as "input", "temporal", "contours", etc.
+        start_index: int
 
-        start_index
+        temporal_data_option: optional, str
+            if not provided or ``None`: uses cnmf.get_temporal()
 
-        reset_timepoint_on_change
+            if zscore: uses zscore of cnmf.get_temporal()
 
-        calcium_framerate
+            if norm: uses 0-1 normalized output of cnmf.get_temporal()
 
-        other_data_loaders: Dict[str, callable]
-            if loading non-calcium related data arrays, provide dict of callables for opening them.
-            Example, if you provide ``data = ["contours", "temporal", "behavior"]``, and the "behavior"
-            column contains videos, you could provide `other_data_loads = {"behavior": LazyVideo}
+            if dfof: uses cnmf.get_dfof()
 
-        data_kwargs: dict
-            kwargs passed to corresponding extension function to load data.
-            example: ``{"temporal": {"component_ixs": "good"}}``
+            if dfof-zscore: uses cnmf.get_dfof() and then zscores
 
-        gridplot_kwargs: List[dict]
-            kwargs passed to GridPlot
+            if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
+
+        reset_timepoint_on_change: bool, default False
+            reset the timepoint in the ImageWidget when changing items/rows
+
+        temporal_kwargs: dict
+            kwargs passed to cnmf.get_temporal(), example: {"add_residuals" : True}.
+            Ignored if temporal_data_option contains "dfof"
+
+        input_movie_kwargs: dict
+            kwargs passed to caiman.get_input()
+
+        image_widget_kwargs: dict
+            kwargs passed to ImageWidget
+
+            Example: `image_widget_kwargs={"cmap": "viridis"}`
 
         data_grid_kwargs
         """
 
-        if data is None:
-            data = [["temporal"], ["input", "rcm", "rcb", "residuals"]]
+        self._dataframe = dataframe
 
-        if other_data_loaders is None:
-            other_data_loaders = dict()
+        valid_temporal_options = [
+            "temporal",
+            "zscore",
+            "norm",
+            "dfof",
+            "dfof-zscore",
+            "dfof-norm"
+        ]
 
-        # simple list of str, single gridplot
-        if all(isinstance(option, str) for option in data):
-            data = [data]
+        if temporal_data_option is None:
+            temporal_data_option = "temporal"
 
-        if not all(isinstance(option, list) for option in data):
-            raise TypeError(
-                "Must pass list of str or nested list of str"
+        if temporal_data_option not in valid_temporal_options:
+            raise ValueError(
+                f"You have passed the following invalid temporal option: {temporal_data_option}\n"
+                f"Valid options are:\n"
+                f"{valid_temporal_options}"
             )
 
-        # make sure data options are valid
-        for d in list(itertools.chain(*data)):
-            if (d not in VALID_DATA_OPTIONS) and (d not in dataframe.columns):
+        if image_data_options is None:
+            image_data_options = [
+                "input",
+                "rcm",
+                "rcb",
+                "residuals"
+            ]
+
+        for option in image_data_options:
+            if option not in IMAGE_OPTIONS:
                 raise ValueError(
-                    f"`data` options are: {VALID_DATA_OPTIONS} or a DataFrame column name: {dataframe.columns}\n"
-                    f"You have passed: {d}"
+                    f"Invalid image option passed, valid image options are:\n"
+                    f"{IMAGE_OPTIONS}"
                 )
 
-            if d in dataframe.columns:
-                if d not in other_data_loaders.keys():
-                    raise ValueError(
-                        f"You have provided the non-CNMF related data option: {d}.\n"
-                        f"If you provide a non-cnmf related data option you must also provide a "
-                        f"data loader callable for it to `other_data_loaders`"
-                    )
+        self._image_data_options = image_data_options
 
-        self._other_data_loaders = other_data_loaders
+        self.temporal_data_option = temporal_data_option
+        self.temporal_kwargs = temporal_kwargs
 
-        if data_grid_kwargs is None:
-            data_grid_kwargs = dict()
+        if self.temporal_kwargs is None:
+            self.temporal_kwargs = dict()
 
-        self._dataframe = dataframe
+        # for now we will force all components, accepted and rejected, to be shown
+        if "component_indices" in self.temporal_kwargs.keys():
+            raise ValueError(
+                "The kwarg `component_indices` is not allowed here."
+            )
+
+        self.reset_timepoint_on_change = reset_timepoint_on_change
+        self.input_movie_kwargs = input_movie_kwargs
 
         default_widths = {
             "algo": 50,
@@ -723,6 +412,9 @@ class CNMFVizContainer:
 
         df_show = self._dataframe[[c for c in columns if c not in hide_columns]]
 
+        if data_grid_kwargs is None:
+            data_grid_kwargs = dict()
+
         self.datagrid = DataGrid(
             df_show,  # show only a subset
             selection_mode="cell",
@@ -738,31 +430,28 @@ class CNMFVizContainer:
             height="250px",
             max_height="250px",
             width="360px",
-            max_width="500px"
+            max_width="500px",
+            disabled=True,
         )
 
-        # data options is private since this can't be changed once an image widget has been made
-        self._data = data
+        if image_widget_kwargs is None:
+            image_widget_kwargs = dict()
 
-        if data_kwargs is None:
-            data_kwargs = dict()
+        default_image_widget_kwargs = {
+            "cmap": "gnuplot2",
+            "grid_plot_kwargs": {"size": (720, 602)},
+        }
 
-        self.data_kwargs = data_kwargs
+        self.image_widget_kwargs = {
+            **default_image_widget_kwargs,
+            **image_widget_kwargs
+        }
+
+        if start_index is None:
+            start_index = dataframe[dataframe.algo == "cnmf"].iloc[0].name
 
         self.current_row: int = start_index
 
-        self._make_gridplot(
-            start_index=start_index,
-            reset_timepoint_on_change=reset_timepoint_on_change,
-            data_graphic_kwargs=data_graphic_kwargs,
-            gridplot_kwargs=gridplot_kwargs,
-            cmap=cmap,
-            component_colors=component_colors,
-        )
-
-        self._set_params_text_area(index=start_index)
-
-        # set initial selected row
         self.datagrid.select(
             row1=start_index,
             column1=0,
@@ -774,62 +463,110 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
-    def _make_gridplot(
-            self,
-            start_index: int,
-            reset_timepoint_on_change: bool,
-            data_graphic_kwargs: dict,
-            gridplot_kwargs: dict,
-            cmap: str,
-            component_colors: str,
-    ):
+        # ipywidgets for selecting components
+        self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
+        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1, layout=Layout(width="100px"))
+        for trait in ["value", "max"]:
+            jslink((self.component_slider, trait), (self.component_int_box, trait))
 
-        data_mapping = get_cnmf_data_mapping(
-            self._dataframe.iloc[start_index],
-            self.data_kwargs
+        self.component_int_box.observe(
+            lambda change: self.set_component_index(change["new"]), "value"
         )
 
-        self._gridplot_wrapper = GridPlotWrapper(
-            data=self._data,
-            data_mapping=data_mapping,
-            reset_timepoint_on_change=reset_timepoint_on_change,
-            data_graphic_kwargs=data_graphic_kwargs,
-            gridplot_kwargs=gridplot_kwargs,
-            cmap=cmap,
-            component_colors=component_colors
-
+        self._component_metrics_text = Text(
+            value="",
+            placeholder="component metrics",
+            description='metrics:',
+            disabled=True,
+            layout=Layout(width="350px")
         )
 
-        self.gridplots = self._gridplot_wrapper.gridplots
+        # checkbox to zoom into components when selected
+        self.checkbox_zoom_components = Checkbox(
+            value=True,
+            description="auto-zoom component",
+            description_tooltip="If checked, zoom into selected component"
+        )
+        # zoom factor
+        self.zoom_components_scale = FloatSlider(
+            min=0.25,
+            max=3,
+            value=1,
+            step=0.25,
+            description="zoom scale",
+            description_tooltip="zoom scale as a factor of component width/height"
+        )
+        # organize these widgets to be shown at the top
+        self._top_widget = VBox([
+            HBox([self.datagrid, self.params_text_area]),
+            HBox([self.component_slider, self.component_int_box, self._component_metrics_text]),
+            HBox([self.checkbox_zoom_components, self.zoom_components_scale])
+        ])
 
-    def show(self):
-        """Show the widget"""
-
-        self.show_all_checkbox = Checkbox(value=True, description="Show all components")
-
-        widget = VBox(
-            [
-                HBox([self.datagrid, self.params_text_area]),
-                self.show_all_checkbox,
-                HBox([self._gridplot_wrapper.component_slider, self._gridplot_wrapper.component_int_box]),
-                VBox([gp.show() for gp in self.gridplots])
-            ]
+        self._dropdown_contour_colors = Dropdown(
+            options=["random", "accepted", "rejected", "snr_comps", "snr_comps_log", "r_values", "cnn_preds"],
+            value="random",
+            description='contour colors:',
         )
 
-        self.show_all_checkbox.observe(self._toggle_show_all, "value")
+        self._dropdown_contour_colors.observe(self._ipywidget_set_component_colors, "value")
 
-        return widget
+        self._radio_visible_components = RadioButtons(
+            options=["all", "accepted", "rejected"],
+            description_tooltip="contours to make visible",
+            description="visible contours"
+        )
 
-    def _toggle_show_all(self, change):
-        for line_collection in self._gridplot_wrapper.temporal_graphics:
-            line_collection[:].present = change["new"]
+        self._radio_visible_components.observe(self._ipywidget_set_component_colors, "value")
 
-    def close(self):
-        """Close the widget"""
-        for gp in self.gridplots:
-            gp.close()
+        self._spinbox_alpha_invisible_contours = FloatSlider(
+            value=0.0,
+            min=0.0,
+            max=1.0,
+            step=0.1,
+            description="invisible alpha:",
+            description_tooltip="transparency of contours set to be invisible",
+            disabled=False
+        )
 
-    def _get_selection_row(self) -> Union[int, None]:
+        self._spinbox_alpha_invisible_contours.observe(self._ipywidget_set_component_colors, "value")
+
+        self._box_contour_controls = VBox([
+            self._dropdown_contour_colors,
+            HBox([self._radio_visible_components, self._spinbox_alpha_invisible_contours])
+        ])
+
+        self._eval_controller = EvalController()
+        self._eval_controller.add_handler(self._set_eval)
+        self._eval_controller.button_save_eval.on_click(self._save_eval)
+        self._eval_controller.button_reset_eval.on_click(self._reset_eval)
+
+        self._tab_contours_eval = Tab()
+        self._tab_contours_eval.children = [self._box_contour_controls, self._eval_controller.widget]
+        self._tab_contours_eval.titles = ["contour colors", "eval params"]
+
+        # plots
+        self._plot_temporal = fpl.Plot(size=(500, 120))
+        self._plot_temporal.camera.maintain_aspect = False
+        self._plot_heatmap = fpl.Plot(size=(500, 450))
+        self._plot_heatmap.camera.maintain_aspect = False
+
+        self._image_widget: fpl.ImageWidget = None
+
+        self._synchronizer = fpl.Synchronizer(key_bind=None)
+
+        self._contour_graphics: List[fpl.LineCollection] = list()
+
+        self._component_index = 0
+
+        self._cnmf_obj: CNMF = None
+
+        data_arrays = self._get_row_data(index=start_index)
+        self._set_data(data_arrays)
+
+        self._set_params_text_area(index=start_index)
+
+    def _get_selected_row(self) -> Union[int, None]:
         r1 = self.datagrid.selections[0]["r1"]
         r2 = self.datagrid.selections[0]["r2"]
 
@@ -843,29 +580,41 @@ class CNMFVizContainer:
 
         return index
 
-    def _row_changed(self, *args):
-        index = self._get_selection_row()
-        if index is None:
-            return
+    def _get_row_data(self, index: int) -> Dict[str, np.ndarray]:
+        data_mapping = get_cnmf_data_mapping(
+            series=self._dataframe.iloc[index],
+            input_movie_kwargs=self.input_movie_kwargs,
+            temporal_kwargs=self.temporal_kwargs
+        )
 
-        if self.current_row == index:
-            return
+        temporal = data_mapping[self.temporal_data_option]()
 
-        try:
-            data_mapping = get_cnmf_data_mapping(
-                self._dataframe.iloc[index],
-                self.data_kwargs
-            )
-            self._gridplot_wrapper.change_data(data_mapping)
-        except Exception as e:
-            self.params_text_area.value = f"{type(e).__name__}\n" \
-                                          f"{str(e)}\n\n" \
-                                          f"See jupyter log for details"
-            raise e
+        rcm = data_mapping["rcm"]()
 
-        self._set_params_text_area(index)
+        shape = rcm.shape
+        ndim = rcm.ndim
+        size = rcm.shape[0] * rcm.shape[1] * rcm.shape[2]
 
-        self.current_row = index
+        images = list()
+        for option in self._image_data_options:
+            array = data_mapping[option]()
+
+            if array.ndim == 2:  # for 2D images, to make ImageWidget happy
+                array = DummyMovie(array, shape=shape, ndim=ndim, size=size)
+
+            images.append(array)
+
+        contours = data_mapping["contours"]()
+        cnmf_obj = data_mapping["cnmf_obj"]()
+
+        data_arrays = {
+            "temporal": temporal,
+            "images": images,
+            "contours": contours,
+            "cnmf_obj": cnmf_obj
+        }
+
+        return data_arrays
 
     def _set_params_text_area(self, index):
         row = self._dataframe.iloc[index]
@@ -874,15 +623,449 @@ class CNMFVizContainer:
             param_diffs = self._dataframe.caiman.get_params_diffs(
                 algo=row["algo"],
                 item_name=row["item_name"]
-            ).iloc[index]
+            ).loc[index]
 
-            diffs_dict = {"diffs": param_diffs}
+            diffs_dict = {"diffs": param_diffs.to_dict()}
             diffs = f"{format_params(diffs_dict, 0)}\n\n"
         except:
             diffs = ""
 
         # diffs and full params
         self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+
+    def _row_changed(self, *args):
+        index = self._get_selected_row()
+        if index is None:
+            return
+
+        if self.current_row == index:
+            return
+
+        try:
+            data_arrays = self._get_row_data(index)
+
+        except Exception as e:
+            self.params_text_area.value = f"{type(e).__name__}\n" \
+                                          f"{str(e)}\n\n" \
+                                          f"See jupyter log for details"
+            raise e
+
+        else:
+            # no exceptions, set plots
+            self._set_data(data_arrays)
+            self._set_params_text_area(index)
+            self.current_row = index
+
+    def _set_data(self, data_arrays: Dict[str, np.ndarray]):
+        self._contour_graphics.clear()
+
+        self._synchronizer.clear()
+
+        self._plot_temporal.clear()
+        self._plot_heatmap.clear()
+
+        # make our temporal plots first, else image widget slider events could trigger linear selectors
+        self._temporal_data = data_arrays["temporal"]
+
+        # make temporal graphics
+        self._plot_temporal.add_line(self._temporal_data[0], name="line")
+        # autoscale the single temporal line plot when the data changes
+        self._plot_temporal["line"].data.add_event_handler(self._plot_temporal.auto_scale)
+        self._plot_heatmap.add_heatmap(self._temporal_data, name="heatmap")
+
+        self._component_linear_selector: fpl.LinearSelector = self._plot_heatmap["heatmap"].add_linear_selector(axis="y", thickness=5)
+        self._component_linear_selector.selection.add_event_handler(self.set_component_index)
+
+        # linear selectors and events
+        self._linear_selector_temporal: fpl.LinearSelector = self._plot_temporal["line"].add_linear_selector()
+        self._linear_selector_temporal.selection.add_event_handler(self._set_frame_index_from_linear_selector)
+
+        self._linear_selector_heatmap: fpl.LinearSelector = self._plot_heatmap["heatmap"].add_linear_selector()
+
+        # sync the linear selectors
+        self._synchronizer.add(self._linear_selector_temporal)
+        self._synchronizer.add(self._linear_selector_heatmap)
+
+        if self._image_widget is None:
+            self._image_widget = fpl.ImageWidget(
+                data=data_arrays["images"],
+                names=self._image_data_options,
+                **self.image_widget_kwargs
+            )
+
+            self._image_widget.gridplot.renderer.add_event_handler(self._manual_toggle_component, "key_down")
+
+            # need to start it here so that we can access the toolbar to link events with the slider
+            self._image_widget.show()
+
+        else:
+            # image widget doesn't need clear, we can just use set_data
+            self._image_widget.set_data(
+                data_arrays["images"],
+                reset_indices=self.reset_timepoint_on_change,
+                reset_vmin_vmax=True
+            )
+
+            for g in self._image_widget.managed_graphics:
+                g.registered_callbacks.clear()
+
+            for subplot in self._image_widget.gridplot:
+                if "contours" in subplot:
+                    # delete the contour graphics
+                    subplot.delete_graphic(subplot["contours"])
+
+        # absolute garbage monkey patch which I will fix once we make ImageWidget emit its own events
+        if hasattr(self._image_widget.sliders["t"], "qslider"):
+            self._image_widget.sliders["t"].qslider.valueChanged.connect(self._set_linear_selector_index_from_image_widget)
+        else:
+            # ipywidget
+            self._image_widget.sliders["t"].observe(self._set_linear_selector_index_from_image_widget, "value")
+
+        contours = data_arrays["contours"][0]
+
+        n_components = len(contours)
+        self._random_colors = np.random.rand(n_components, 4).astype(np.float32)
+        self._random_colors[:, -1] = 1
+
+        for subplot in self._image_widget.gridplot:
+            contour_graphic = subplot.add_line_collection(
+                contours,
+                colors=self._random_colors,
+                name="contours"
+            )
+            self._contour_graphics.append(contour_graphic)
+
+            image_graphic = subplot["image_widget_managed"]
+
+            image_graphic.link(
+                "click",
+                target=contour_graphic,
+                feature="thickness",
+                new_data=5,
+                callback=self._euclidean
+            )
+
+            # contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
+
+        self.component_int_box.value = 0
+        self.component_slider.value = 0
+        self.component_int_box.max = n_components - 1
+        self.component_slider.max = n_components - 1
+
+        # current state of CNMF object
+        # this can be different from the one in the dataframe if the user uses eval
+        self._cnmf_obj: CNMF = data_arrays["cnmf_obj"]
+
+        self._eval_controller.set_limits(self._cnmf_obj)
+
+    def _euclidean(self, source, target, event, new_data):
+        """maps click events to contour"""
+        # calculate coms of line collection
+        indices = np.array(event.pick_info["index"])
+
+        coms = list()
+
+        for contour in target.graphics:
+            coors = contour.data()[~np.isnan(contour.data()).any(axis=1)]
+            com = coors.mean(axis=0)
+            coms.append(com)
+
+        # euclidean distance to find closest index of com
+        indices = np.append(indices, [0])
+
+        ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
+
+        self.set_component_index(ix)
+
+        return None
+
+    def set_component_index(self, index):
+        if hasattr(index, "pick_info"):
+            # came from heatmap component selector
+            if index.pick_info["pygfx_event"] is None:
+                # this means that the selector was not triggered by the user but that it moved due to another event
+                # so then we don't set_component_index because then infinite recursion
+                return
+            index = index.pick_info["selected_index"]
+
+        for g in self._contour_graphics:
+            g.set_feature(feature="thickness", new_data=8, indices=index)
+
+        self._plot_temporal["line"].data = self._temporal_data[index]
+
+        # set the component index property
+        self._component_index = index
+
+        if self._component_linear_selector._move_info is None:
+            # TODO: Very hacky for now, ignores if the slider is currently being moved by the user
+            # prevents weird slider movement
+            self._component_linear_selector.selection = index
+
+        self._zoom_into_component(index)
+
+        self.component_int_box.unobserve_all()
+        self.component_int_box.value = index
+        self.component_int_box.observe(
+            lambda change: self.set_component_index(change["new"]), "value"
+        )
+
+        metrics = (f"snr: {self._cnmf_obj.estimates.SNR_comp[index]:.02f}, "
+                   f"r_values: {self._cnmf_obj.estimates.r_values[index]:.02f}, "
+                   f"cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} ")
+
+        self._component_metrics_text.value = metrics
+
+    def _zoom_into_component(self, index: int):
+        if not self.checkbox_zoom_components.value:
+            return
+
+        for subplot in self._image_widget.gridplot:
+            subplot.camera.show_object(
+                subplot["contours"].graphics[index].world_object,
+                scale=self.zoom_components_scale.value
+            )
+
+    def _set_frame_index_from_linear_selector(self, ev):
+        # TODO: hacky mess, need to make ImageWidget emit events
+        ix = ev.pick_info["selected_index"]
+        self._image_widget.sliders["t"].value = ix
+
+    def _set_linear_selector_index_from_image_widget(self, ev):
+        if isinstance(ev, dict):
+            # ipywidget
+            ix = ev["new"]
+
+        # else it's directly from Qt slider
+        else:
+            ix = ev
+
+        self._linear_selector_temporal.selection = ix
+        self._linear_selector_heatmap.selection = ix
+
+    def _ipywidget_set_component_colors(self, *args):
+        """just a wrapper to make ipywidgets happy"""
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
+    def set_component_colors(
+            self,
+            metric: Union[str, np.ndarray],
+            cmap: str = None,
+    ):
+        """
+
+        Parameters
+        ----------
+        metric: str or np.ndarray
+            str, one of: random, accepted, rejected, accepted-rejected, snr_comps, snr_comps_log,
+            r_values, cnn_preds.
+
+            Can also pass a 1D array of other metrics
+
+            If np.ndarray, it must be of the same length as the number of components
+
+        cmap: str
+            custom cmap for the colors
+
+        Returns
+        -------
+
+        """
+        cnmf_obj = self._cnmf_obj
+        n_contours = len(self._image_widget.gridplot[0, 0]["contours"])
+
+        # use the random colors
+        if metric == "random":
+            for subplot in self._image_widget.gridplot:
+                for i, g in enumerate(subplot["contours"].graphics):
+                    g.colors = self._random_colors[i]
+
+                # set alpha values based on all, accepted, rejected selection
+                self._set_component_visibility(subplot["contours"], cnmf_obj)
+            return
+
+        if metric in ["accepted", "rejected"]:
+            if cmap is None:
+                cmap = "Set1"
+
+            # make a empty array for cmap_values
+            classifier = np.zeros(n_contours, dtype=int)
+            # set the accepted components to 1
+            classifier[cnmf_obj.estimates.idx_components] = 1
+
+        else:
+            if cmap is None:
+                cmap = "spring"
+
+            if metric == "snr_comps":
+                classifier = cnmf_obj.estimates.SNR_comp
+
+            elif metric == "snr_comps_log":
+                classifier = np.log10(cnmf_obj.estimates.SNR_comp)
+
+            elif metric == "r_values":
+                classifier = cnmf_obj.estimates.r_values
+
+            elif metric == "cnn_preds":
+                classifier = cnmf_obj.estimates.cnn_preds
+
+            elif isinstance(metric, np.ndarray):
+                if not metric.size == n_contours:
+                    raise ValueError(f"If using np.ndarray cor component_colors, the array size must be "
+                                     f"the same as n_contours: {n_contours}, your array size is: {metric.size}")
+
+                classifier = metric
+
+            else:
+                raise ValueError("Invalid colors value")
+
+        for subplot in self._image_widget.gridplot:
+            # first initialize using a quantitative cmap
+            # this ensures that setting cmap_values will work
+            subplot["contours"].cmap = "gray"
+
+            if len(np.unique(classifier)) == 1:
+                # TODO: patch until next fastplotlib release
+                color = get_cmap(cmap)[0]  # set using first color in cmap
+                subplot["contours"][:].colors = color
+            else:
+                subplot["contours"].cmap_values = classifier
+                subplot["contours"].cmap = cmap
+
+            self._set_component_visibility(subplot["contours"], cnmf_obj)
+
+    def _set_component_visibility(self, contours: fpl.LineCollection, cnmf_obj):
+        visible = self._radio_visible_components.value
+        alpha_invisible = self._spinbox_alpha_invisible_contours.value
+
+        # choose to make all or accepted or rejected visible
+        if visible == "accepted":
+            contours[cnmf_obj.estimates.idx_components_bad].colors[:, -1] = alpha_invisible
+
+        elif visible == "rejected":
+            contours[cnmf_obj.estimates.idx_components].colors[:, -1] = alpha_invisible
+
+        else:
+            # make everything visible
+            contours[:].colors[:, -1] = 1
+
+    def _set_eval(self, eval_params: dict):
+        index = self._get_selected_row()
+        # wonky caiman params object stuff
+        self._cnmf_obj.params.quality.update(eval_params)
+
+        self._cnmf_obj.estimates.filter_components(
+            imgs=self._dataframe.iloc[index].caiman.get_input_movie(),
+            params=self._cnmf_obj.params
+        )
+
+        # set the colors
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
+    def _reset_eval(self, obj):
+        index = self._get_selected_row()
+
+        # get CNMF object from cache
+        cnmf_obj = self._dataframe.iloc[index].cnmf.get_output()
+        # reset eval
+        self._set_eval(cnmf_obj.params.get_group("quality"))
+
+    def _save_eval(self, obj):
+        # this overwrites the hdf5 file
+        index = self._get_selected_row()
+
+        # delete existing file
+        path = self._dataframe.iloc[index].cnmf.get_output_path()
+        path.unlink()
+
+        # save to disk
+        self._cnmf_obj.save(str(path))
+
+        # clear the cache
+        cnmf_cache.clear_cache()
+
+        print("Overwrote CNMF object with new eval")
+
+    def _manual_toggle_component(self, ev):
+        if not hasattr(ev, "key"):
+            return
+
+        if ev.key == "a":
+            if self.component_index in self._cnmf_obj.estimates.idx_components:
+                # component already in good
+                return
+            # else swap it from bad and put into good
+
+            # remove from bad
+            self._cnmf_obj.estimates.idx_components_bad = np.delete(
+                self._cnmf_obj.estimates.idx_components_bad,
+                self._cnmf_obj.estimates.idx_components_bad == self.component_index
+            )
+
+            # put index into good
+            self._cnmf_obj.estimates.idx_components = np.sort(np.concatenate([
+                self._cnmf_obj.estimates.idx_components,
+                [self.component_index]
+            ]))
+
+        elif ev.key == "r":
+            if self.component_index in self._cnmf_obj.estimates.idx_components_bad:
+                # component already in bad
+                return
+            # else swap it from bad and put into good
+
+            # remove from good
+            self._cnmf_obj.estimates.idx_components = np.delete(
+                self._cnmf_obj.estimates.idx_components,
+                self._cnmf_obj.estimates.idx_components == self.component_index
+            )
+
+            # put index into bad
+            self._cnmf_obj.estimates.idx_components_bad = np.sort(np.concatenate([
+                self._cnmf_obj.estimates.idx_components_bad,
+                [self.component_index]
+            ]))
+
+        # set the colors
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
+    def show(self, sidecar: bool = False):
+        """
+        Show the widget
+
+        Parameters
+        ----------
+        sidecar
+
+        Returns
+        -------
+
+        """
+
+        if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+            temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
+            plots = HBox([temporals, self._image_widget.widget])
+            widget = VBox([self._top_widget, plots, self._tab_contours_eval])
+            if sidecar:
+                with Sidecar():
+                    return display(widget)
+            else:
+                return widget
+
+        elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+            self.plot_temporal.show()
+            self.plot_heatmap.show()
+            self.image_widget.show()
+
+            widget = VBox([self._top_widget, self._tab_contours_eval])
+
+            return widget
+        else:
+            raise EnvironmentError(
+                "No available output context. Make sure you're running in jupyterlab or using %gui qt"
+            )
 
 
 @pd.api.extensions.register_dataframe_accessor("cnmf")
@@ -891,39 +1074,52 @@ class CNMFDataFrameVizExtension:
         self._dataframe = df
 
     def viz(
-            self,
-            data: List[str] = None,
-            start_index: int = 0,
-            reset_timepoint_on_change: bool = False,
-            data_graphic_kwargs: dict = None,
-            gridplot_kwargs: dict = None,
-            cmap: str = "gnuplot2",
-            component_colors: str = "random",
-            calcium_framerate: float = None,
-            other_data_loaders: Dict[str, callable] = None,
-            data_kwargs: dict = None,
-            data_grid_kwargs: dict = None,
+        self,
+        start_index: int = None,
+        temporal_data_option: str = None,
+        image_data_options: list[str] = None,
+        temporal_kwargs: dict = None,
+        reset_timepoint_on_change: bool = False,
+        input_movie_kwargs: dict = None,
+        image_widget_kwargs: dict = None,
+        data_grid_kwargs: dict = None,
     ):
         """
-        Visualize motion correction output.
+        Visualize CNMF output and other data columns such as behavior video (optional).
+
+        Note: If using dfof temporal_data_option, you must have already run dfof.
 
         Parameters
         ----------
-        data: list of str or list of list of str
-            default [["temporal"], ["input", "rcm", "rcb", "residuals"]]
-            list of data to plot, valid options are:
+        dataframe: pd.DataFrame
+
+        start_index: int
+
+        temporal_data_option: optional, str
+            if not provided or ``None`: uses cnmf.get_temporal()
+
+            if zscore: uses zscore of cnmf.get_temporal()
+
+            if norm: uses 0-1 normalized output of cnmf.get_temporal()
+
+            if dfof: uses cnmf.get_dfof()
+
+            if dfof-zscore: uses cnmf.get_dfof() and then zscores
+
+            if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
+
+        image_data_options: list of str
+            default: ["input", "rcm", "rcb", "residuals"]
+
+            Valid options:
 
             +------------------+-----------------------------------------+
+            |      option      | description                             |
+            +------------------+-----------------------------------------+
             | "input"          | input movie                             |
-            +==================+=========================================+
             | "rcm"            | reconstructed movie, A * C              |
             | "rcb"            | reconstructed background, b * f         |
             | "residuals"      | residuals, input - (A * C) - (b * f)    |
-            | "corr"           | correlation image, if computed          |
-            | "pnr"            | peak-noise-ratio image, if computed     |
-            | "temporal"       | temporal components overlaid            |
-            | "temporal-stack" | temporal components stack               |
-            | "heatmap"        | temporal components heatmap             |
             | "rcm-mean"       | rcm mean projection image               |
             | "rcm-min"        | rcm min projection image                |
             | "rcm-max"        | rcm max projection image                |
@@ -937,34 +1133,33 @@ class CNMFDataFrameVizExtension:
             | "std"            | standard deviation projection image     |
             +------------------+-----------------------------------------+
 
-
-        start_index: int, default 0
-            start index item used to set the initial data in the ImageWidget
-
         reset_timepoint_on_change: bool, default False
             reset the timepoint in the ImageWidget when changing items/rows
 
-        data_grid_kwargs: dict, optional
-            kwargs passed to DataGrid()
+        temporal_kwargs: dict
+            kwargs passed to cnmf.get_temporal(), example: {"add_residuals" : True}.
+            Ignored if temporal_data_option contains "dfof"
 
-        Returns
-        -------
-        McorrVizContainer
-            widget that contains the DataGrid, params text box and ImageWidget
+        input_movie_kwargs: dict
+            kwargs passed to caiman.get_input()
+
+        image_widget_kwargs: dict
+            kwargs passed to ImageWidget
+
+            Example: `image_widget_kwargs={"cmap": "viridis"}`
         """
+
         container = CNMFVizContainer(
             dataframe=self._dataframe,
-            data=data,
             start_index=start_index,
+            temporal_data_option=temporal_data_option,
+            image_data_options=image_data_options,
+            temporal_kwargs=temporal_kwargs,
             reset_timepoint_on_change=reset_timepoint_on_change,
-            data_graphic_kwargs=data_graphic_kwargs,
-            gridplot_kwargs=gridplot_kwargs,
-            cmap=cmap,
-            component_colors=component_colors,
-            calcium_framerate=calcium_framerate,
-            other_data_loaders=other_data_loaders,
-            data_kwargs=data_kwargs,
+            input_movie_kwargs=input_movie_kwargs,
+            image_widget_kwargs=image_widget_kwargs,
             data_grid_kwargs=data_grid_kwargs,
+
         )
 
         return container
