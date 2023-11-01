@@ -654,6 +654,7 @@ class CNMFVizContainer:
             # no exceptions, set plots
             self._set_data(data_arrays)
             self._set_params_text_area(index)
+            self.current_row = index
 
     def _set_data(self, data_arrays: Dict[str, np.ndarray]):
         self._contour_graphics.clear()
@@ -704,6 +705,10 @@ class CNMFVizContainer:
                 reset_indices=self.reset_timepoint_on_change,
                 reset_vmin_vmax=True
             )
+
+            for g in self._image_widget.managed_graphics:
+                g.registered_callbacks.clear()
+
             for subplot in self._image_widget.gridplot:
                 if "contours" in subplot:
                     # delete the contour graphics
@@ -771,8 +776,6 @@ class CNMFVizContainer:
         ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
 
         self.set_component_index(ix)
-
-        self.component_int_box.value = ix
 
         return None
 
