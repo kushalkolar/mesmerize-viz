@@ -6,9 +6,10 @@ from warnings import warn
 import numpy as np
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
+from ipywidgets import Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 import fastplotlib as fpl
+from caiman.source_extraction.cnmf import CNMF
 
 
 from ._utils import DummyMovie
@@ -121,6 +122,7 @@ def get_cnmf_data_mapping(
     }
 
     mapping = {
+        "cnmf_obj": series.cnmf.get_output,
         "input": ExtensionCallWrapper(series.caiman.get_input_movie, input_movie_kwargs),
         "rcm": series.cnmf.get_rcm,
         "rcb": series.cnmf.get_rcb,
@@ -293,7 +295,8 @@ class CNMFVizContainer:
             image_widget_kwargs = dict()
 
         default_image_widget_kwargs = {
-            "cmap": "gnuplot2"
+            "cmap": "gnuplot2",
+            "grid_plot_kwargs": {"size": (720, 602)},
         }
 
         self.image_widget_kwargs = {
@@ -319,12 +322,20 @@ class CNMFVizContainer:
 
         # ipywidgets for selecting components
         self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
-        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1)
+        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1, layout=Layout(width="100px"))
         for trait in ["value", "max"]:
             jslink((self.component_slider, trait), (self.component_int_box, trait))
 
         self.component_int_box.observe(
             lambda change: self.set_component_index(change["new"]), "value"
+        )
+
+        self._component_metrics_text = Text(
+            value="",
+            placeholder="component metrics",
+            description='metrics:',
+            disabled=True,
+            layout=Layout(width="350px")
         )
 
         # checkbox to zoom into components when selected
@@ -345,7 +356,7 @@ class CNMFVizContainer:
         # organize these widgets to be shown at the top
         self._top_widget = VBox([
             HBox([self.datagrid, self.params_text_area]),
-            HBox([self.component_slider, self.component_int_box]),
+            HBox([self.component_slider, self.component_int_box, self._component_metrics_text]),
             HBox([self.checkbox_zoom_components, self.zoom_components_scale])
         ])
 
@@ -383,9 +394,9 @@ class CNMFVizContainer:
         ])
 
         # plots
-        self._plot_temporal = fpl.Plot()
+        self._plot_temporal = fpl.Plot(size=(500, 120))
         self._plot_temporal.camera.maintain_aspect = False
-        self._plot_heatmap = fpl.Plot()
+        self._plot_heatmap = fpl.Plot(size=(500, 450))
         self._plot_heatmap.camera.maintain_aspect = False
 
         self._image_widget: fpl.ImageWidget = None
@@ -436,11 +447,13 @@ class CNMFVizContainer:
             images.append(array)
 
         contours = data_mapping["contours"]()
+        cnmf_obj = data_mapping["cnmf_obj"]()
 
         data_arrays = {
             "temporal": temporal,
             "images": images,
             "contours": contours,
+            "cnmf_obj": cnmf_obj
         }
 
         return data_arrays
@@ -546,6 +559,13 @@ class CNMFVizContainer:
 
             contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
 
+        self.component_int_box.value = 0
+        self.component_slider.value = 0
+        self.component_int_box.max = n_components - 1
+        self.component_slider.max = n_components - 1
+
+        self._cnmf_obj: CNMF = data_arrays["cnmf_obj"]
+
     def _euclidean(self, source, target, event, new_data):
         """maps click events to contour"""
         # calculate coms of line collection
@@ -589,6 +609,14 @@ class CNMFVizContainer:
             self._component_linear_selector.selection = index
 
         self._zoom_into_component(index)
+
+        self.component_int_box.value = index
+
+        metrics = (f"snr: {self._cnmf_obj.estimates.SNR_comp[index]:.02f}, "
+                   f"r_values: {self._cnmf_obj.estimates.r_values[index]:.02f}, "
+                   f"cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} ")
+
+        self._component_metrics_text.value = metrics
 
     def _zoom_into_component(self, index: int):
         if not self.checkbox_zoom_components.value:
