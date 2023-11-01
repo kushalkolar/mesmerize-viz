@@ -317,6 +317,7 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
+        # ipywidgets for selecting components
         self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
         self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1)
         for trait in ["value", "max"]:
@@ -326,12 +327,13 @@ class CNMFVizContainer:
             lambda change: self.set_component_index(change["new"]), "value"
         )
 
+        # checkbox to zoom into components when selected
         self.checkbox_zoom_components = Checkbox(
             value=True,
             description="auto-zoom component",
             description_tooltip="If checked, zoom into selected component"
         )
-
+        # zoom factor
         self.zoom_components_scale = FloatSlider(
             min=0.25,
             max=3,
@@ -340,13 +342,47 @@ class CNMFVizContainer:
             description="zoom scale",
             description_tooltip="zoom scale as a factor of component width/height"
         )
-
+        # organize these widgets to be shown at the top
         self._top_widget = VBox([
             HBox([self.datagrid, self.params_text_area]),
             HBox([self.component_slider, self.component_int_box]),
             HBox([self.checkbox_zoom_components, self.zoom_components_scale])
         ])
 
+        self._dropdown_contour_colors = Dropdown(
+            options=["random", "accepted", "rejected", "snr_comps", "snr_comps_log", "r_values", "cnn_preds"],
+            value="random",
+            description='contour colors:',
+        )
+
+        self._dropdown_contour_colors.observe(self._ipywidget_set_component_colors, "value")
+
+        self._radio_visible_components = RadioButtons(
+            options=["all", "accepted", "rejected"],
+            description_tooltip="contours to make visible",
+            description="visible contours"
+        )
+
+        self._radio_visible_components.observe(self._ipywidget_set_component_colors, "value")
+
+        self._spinbox_alpha_invisible_contours = FloatSlider(
+            value=0.0,
+            min=0.0,
+            max=1.0,
+            step=0.1,
+            description="invisible alpha:",
+            description_tooltip="transparency of contours set to be invisible",
+            disabled=False
+        )
+
+        self._spinbox_alpha_invisible_contours.observe(self._ipywidget_set_component_colors, "value")
+
+        self._box_contour_controls = VBox([
+            self._dropdown_contour_colors,
+            HBox([self._radio_visible_components, self._spinbox_alpha_invisible_contours])
+        ])
+
+        # plots
         self._plot_temporal = fpl.Plot()
         self._plot_temporal.camera.maintain_aspect = False
         self._plot_heatmap = fpl.Plot()
@@ -487,13 +523,13 @@ class CNMFVizContainer:
         contours = data_arrays["contours"][0]
 
         n_components = len(contours)
-        component_colors = np.random.rand(n_components, 4).astype(np.float32)
-        component_colors[:, -1] = 1
+        self._random_colors = np.random.rand(n_components, 4).astype(np.float32)
+        self._random_colors[:, -1] = 1
 
         for subplot in self._image_widget.gridplot:
             contour_graphic = subplot.add_line_collection(
                 contours,
-                colors=component_colors,
+                colors=self._random_colors,
                 name="contours"
             )
             self._contour_graphics.append(contour_graphic)
@@ -581,6 +617,108 @@ class CNMFVizContainer:
         self._linear_selector_temporal.selection = ix
         self._linear_selector_heatmap.selection = ix
 
+    def _ipywidget_set_component_colors(self, *args):
+        """just a wrapper to make ipywidgets happy"""
+        colors = self._dropdown_contour_colors.value
+        self.set_component_colors(colors)
+
+    def set_component_colors(
+            self,
+            metric: Union[str, np.ndarray],
+            cmap: str = None,
+    ):
+        """
+
+        Parameters
+        ----------
+        metric: str or np.ndarray
+            str, one of: random, accepted, rejected, accepted-rejected, snr_comps, snr_comps_log,
+            r_values, cnn_preds.
+
+            Can also pass a 1D array of other metrics
+
+            If np.ndarray, it must be of the same length as the number of components
+
+        cmap: str
+            custom cmap for the colors
+
+        Returns
+        -------
+
+        """
+        cnmf_obj = self._dataframe.iloc[self.current_row].cnmf.get_output()
+        n_contours = len(self._image_widget.gridplot[0, 0]["contours"])
+
+        # use the random colors
+        if metric == "random":
+            for subplot in self._image_widget.gridplot:
+                for i, g in enumerate(subplot["contours"].graphics):
+                    g.colors = self._random_colors[i]
+
+                # set alpha values based on all, accepted, rejected selection
+                self._set_component_visibility(subplot["contours"], cnmf_obj)
+            return
+
+        if metric in ["accepted", "rejected"]:
+            if cmap is None:
+                cmap = "Set1"
+
+            # make a empty array for cmap_values
+            classifier = np.zeros(n_contours, dtype=int)
+            # set the accepted components to 1
+            classifier[cnmf_obj.estimates.idx_components] = 1
+
+        else:
+            if cmap is None:
+                cmap = "spring"
+
+            if metric == "snr_comps":
+                classifier = cnmf_obj.estimates.SNR_comp
+
+            elif metric == "snr_comps_log":
+                classifier = np.log10(cnmf_obj.estimates.SNR_comp)
+
+            elif metric == "r_values":
+                classifier = cnmf_obj.estimates.r_values
+
+            elif metric == "cnn_preds":
+                classifier = cnmf_obj.estimates.cnn_preds
+
+            elif isinstance(metric, np.ndarray):
+                if not metric.size == n_contours:
+                    raise ValueError(f"If using np.ndarray cor component_colors, the array size must be "
+                                     f"the same as n_contours: {n_contours}, your array size is: {metric.size}")
+
+                classifier = metric
+
+            else:
+                raise ValueError("Invalid colors value")
+
+        for subplot in self._image_widget.gridplot:
+            # first initialize using a quantitative cmap
+            # this ensures that setting cmap_values will work
+            subplot["contours"].cmap = "gray"
+
+            subplot["contours"].cmap_values = classifier
+            subplot["contours"].cmap = cmap
+
+            self._set_component_visibility(subplot["contours"], cnmf_obj)
+
+    def _set_component_visibility(self, contours: fpl.LineCollection, cnmf_obj):
+        visible = self._radio_visible_components.value
+        alpha_invisible = self._spinbox_alpha_invisible_contours.value
+
+        # choose to make all or accepted or rejected visible
+        if visible == "accepted":
+            contours[cnmf_obj.estimates.idx_components_bad].colors[:, -1] = alpha_invisible
+
+        elif visible == "rejected":
+            contours[cnmf_obj.estimates.idx_components].colors[:, -1] = alpha_invisible
+
+        else:
+            # make everything visible
+            contours[:].colors[:, -1] = 1
+
     def show(self, sidecar: bool = False):
         """
         Show the widget
@@ -596,6 +734,8 @@ class CNMFVizContainer:
 
         temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
 
-        plots = HBox([temporals, self._image_widget.widget])
+        iw_contour_controls = VBox([self._image_widget.widget, self._box_contour_controls])
+
+        plots = HBox([temporals, iw_contour_controls])
 
         return VBox([self._top_widget, plots])
