@@ -10,6 +10,7 @@ from ipydatagrid import DataGrid
 from ipywidgets import Button, Tab, Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, BoundedFloatText, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 import fastplotlib as fpl
+from fastplotlib.utils import get_cmap
 from caiman.source_extraction.cnmf import CNMF
 
 
@@ -169,7 +170,8 @@ class EvalController:
         for metric in self._float_metrics:
             slider = FloatSlider(value=0, min=0, max=1, step=0.01, description=metric)
             spinbox = BoundedFloatText(
-                value=0, min=0, max=1, step=0.01, description_tooltip=metric, layout=Layout(width="70px")
+                value=0, min=0, max=1, step=0.01,
+                description_tooltip=metric, layout=Layout(width="70px"), readout_format='.2f',
             )
 
             slider.observe(self._call_handlers, "value")
@@ -188,14 +190,24 @@ class EvalController:
             description_tooltip="use CNN classifier"
         )
 
-        self.widget = VBox([*param_entries, self.use_cnn_checkbox])
-
         self._handlers = list()
 
         # limits must be set first before it's usable
         self._block_handlers = True
 
-        self.button_save_eval = Button(description="Save Eval")
+        self.button_save_eval = Button(
+            description="Save Eval",
+            description_tooltip="Saves CNMF hdf5 file using current evaluation"
+        )
+
+        self.button_reset_eval = Button(
+            description="Reset Eval Params",
+            description_tooltip="Reset eval params from the current hdf5 file"
+        )
+
+        buttons = HBox([self.button_save_eval, self.button_reset_eval])
+
+        self.widget = VBox([*param_entries, self.use_cnn_checkbox, buttons])
 
     def set_limits(self, cnmf_obj: CNMF):
         self._block_handlers = True
@@ -501,6 +513,7 @@ class CNMFVizContainer:
 
         self._tab_contours_eval = Tab()
         self._tab_contours_eval.children = [self._box_contour_controls, self._eval_controller.widget]
+        self._tab_contours_eval.titles = ["contour colors", "eval params"]
 
         # plots
         self._plot_temporal = fpl.Plot(size=(500, 120))
@@ -844,8 +857,13 @@ class CNMFVizContainer:
             # this ensures that setting cmap_values will work
             subplot["contours"].cmap = "gray"
 
-            subplot["contours"].cmap_values = classifier
-            subplot["contours"].cmap = cmap
+            if len(np.unique(classifier)) == 1:
+                # TODO: patch until next fastplotlib release
+                color = get_cmap(cmap)[0]  # set using first color in cmap
+                subplot["contours"][:].colors = color
+            else:
+                subplot["contours"].cmap_values = classifier
+                subplot["contours"].cmap = cmap
 
             self._set_component_visibility(subplot["contours"], cnmf_obj)
 
@@ -877,6 +895,13 @@ class CNMFVizContainer:
         # set the colors
         colors = self._dropdown_contour_colors.value
         self.set_component_colors(colors)
+
+    def _reset_eval(self, obj):
+        index = self._get_selected_row()
+
+        # get CNMF object from cache
+        cnmf_obj = self._dataframe.iloc[index].cnmf.get_output()
+        self._set_eval(cnmf_obj.estimates.params.get_group("quality"))
 
     def _save_eval(self, obj):
         index = self._get_selected_row()
