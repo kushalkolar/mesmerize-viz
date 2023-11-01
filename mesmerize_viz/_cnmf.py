@@ -14,7 +14,7 @@ from fastplotlib.utils import get_cmap
 from caiman.source_extraction.cnmf import CNMF
 
 
-from ._utils import DummyMovie
+from ._utils import DummyMovie, format_params
 
 
 IMAGE_OPTIONS = [
@@ -196,13 +196,12 @@ class EvalController:
         self._block_handlers = True
 
         self.button_save_eval = Button(
-            description="Save Eval",
-            description_tooltip="Saves CNMF hdf5 file using current evaluation"
+            description="Save Eval to disk",
         )
 
         self.button_reset_eval = Button(
             description="Reset Eval Params",
-            description_tooltip="Reset eval params from the current hdf5 file"
+            description_tooltip="Reset eval from disk"
         )
 
         buttons = HBox([self.button_save_eval, self.button_reset_eval])
@@ -358,6 +357,7 @@ class CNMFVizContainer:
             raise ValueError(
                 "The kwarg `component_indices` is not allowed here."
             )
+            self._set_params_text_area(index)
 
         self.reset_timepoint_on_change = reset_timepoint_on_change
         self.input_movie_kwargs = input_movie_kwargs
@@ -510,6 +510,7 @@ class CNMFVizContainer:
         self._eval_controller = EvalController()
         self._eval_controller.add_handler(self._set_eval)
         self._eval_controller.button_save_eval.on_click(self._save_eval)
+        self._eval_controller.button_reset_eval.on_click(self._reset_eval)
 
         self._tab_contours_eval = Tab()
         self._tab_contours_eval.children = [self._box_contour_controls, self._eval_controller.widget]
@@ -580,6 +581,23 @@ class CNMFVizContainer:
 
         return data_arrays
 
+    def _set_params_text_area(self, index):
+        row = self._dataframe.iloc[index]
+        # try and get the param diffs
+        try:
+            param_diffs = self._dataframe.caiman.get_params_diffs(
+                algo=row["algo"],
+                item_name=row["item_name"]
+            ).loc[index]
+
+            diffs_dict = {"diffs": param_diffs.to_dict()}
+            diffs = f"{format_params(diffs_dict, 0)}\n\n"
+        except:
+            diffs = ""
+
+        # diffs and full params
+        self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+
     def _row_changed(self, *args):
         index = self._get_selected_row()
         if index is None:
@@ -600,6 +618,7 @@ class CNMFVizContainer:
         else:
             # no exceptions, set plots
             self._set_data(data_arrays)
+            self._set_params_text_area(index)
 
     def _set_data(self, data_arrays: Dict[str, np.ndarray]):
         self._contour_graphics.clear()
@@ -901,7 +920,8 @@ class CNMFVizContainer:
 
         # get CNMF object from cache
         cnmf_obj = self._dataframe.iloc[index].cnmf.get_output()
-        self._set_eval(cnmf_obj.estimates.params.get_group("quality"))
+        # reset eval
+        self._set_eval(cnmf_obj.params.get_group("quality"))
 
     def _save_eval(self, obj):
         index = self._get_selected_row()
