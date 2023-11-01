@@ -12,6 +12,8 @@ from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScaler
 import fastplotlib as fpl
 from fastplotlib.utils import get_cmap
 from caiman.source_extraction.cnmf import CNMF
+from IPython.display import display
+from sidecar import Sidecar
 
 from mesmerize_core.caiman_extensions.cnmf import cnmf_cache
 from mesmerize_core import CNMFExtensions
@@ -1039,13 +1041,28 @@ class CNMFVizContainer:
 
         """
 
-        temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
+        if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+            temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
+            plots = HBox([temporals, self._image_widget.widget])
+            widget = VBox([self._top_widget, plots, self._tab_contours_eval])
+            if sidecar:
+                with Sidecar():
+                    return display(widget)
+            else:
+                return widget
 
-        iw_contour_controls = VBox([self._image_widget.widget, self._tab_contours_eval])
+        elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+            self.plot_temporal.show()
+            self.plot_heatmap.show()
+            self.image_widget.show()
 
-        plots = HBox([temporals, iw_contour_controls])
+            widget = VBox([self._top_widget, self._tab_contours_eval])
 
-        return VBox([self._top_widget, plots])
+            return widget
+        else:
+            raise EnvironmentError(
+                "No available output context. Make sure you're running in jupyterlab or using %gui qt"
+            )
 
 
 @pd.api.extensions.register_dataframe_accessor("cnmf")
