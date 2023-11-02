@@ -333,7 +333,7 @@ class McorrVizContainer:
         # diffs and full params
         self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
 
-    def show(self, sidecar: bool = True):
+    def show(self, sidecar: bool = False):
         """
         Show the widget
         """
