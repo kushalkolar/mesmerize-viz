@@ -111,6 +111,11 @@ class McorrVizContainer:
             # default viz
             data_options = ["input", "mcorr", "mean", "corr"]
 
+        for d in data_options:
+            if d not in VALID_DATA_OPTIONS:
+                raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
+                               f"\n{VALID_DATA_OPTIONS}")
+
         if data_grid_kwargs is None:
             data_grid_kwargs = dict()
 
@@ -414,11 +419,6 @@ class MCorrDataFrameVizExtension:
         McorrVizContainer
             widget that contains the DataGrid, params text box and ImageWidget
         """
-
-        for d in data_options:
-            if d not in VALID_DATA_OPTIONS:
-                raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
-                               f"\n{VALID_DATA_OPTIONS}")
 
         container = McorrVizContainer(
             dataframe=self._dataframe,
