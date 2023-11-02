@@ -834,7 +834,7 @@ class CNMFVizContainer:
                 scale=self.zoom_components_scale.value
             )
 
-    def _center_on_component(self):
+    def _center_on_component(self, obj):
         self._zoom_into_component(self.component_index)
 
     def _set_frame_index_from_linear_selector(self, ev):
