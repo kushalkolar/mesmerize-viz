@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 install_requires = [
-    "fastplotlib[notebook]>=v0.1.0.a14",
+    "fastplotlib[notebook]>=0.1.0a15",
     "ipydatagrid",
     "tslearn",
 ]
