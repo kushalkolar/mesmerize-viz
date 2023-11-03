@@ -370,7 +370,7 @@ class McorrVizContainer:
             # shown the image widget in Qt window
             self._image_widget.show()
             # TODO: remove monkeypatch once the autoscale bug is fixed in fastplotlib
-            self._image_widget.gridplot[0, 0].auto_scale()
+            self._image_widget.gridplot[0, 0].auto_scale(maintain_aspect=True)
             # return datagrid to show in jupyter
             return VBox([datagrid_params, self._slider_mean_window])
 
