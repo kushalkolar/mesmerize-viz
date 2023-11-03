@@ -1,6 +1,6 @@
 # mesmerize-viz
 
-This is currently in beta. Motion Correction and CNMF visualizations should just work. CNMFE will work without `"rcb"` and `"residuals"` `image_data_options`
+This is currently in beta and documentation is a WIP. Motion Correction and CNMF visualizations should just work. CNMFE will work without `"rcb"` and `"residuals"` `image_data_options`.
 
 https://www.youtube.com/watch?v=GWvaEeqA1hw
 
@@ -19,10 +19,6 @@ If you want to use `%gui qt` you will need pyqt6:
 ```
 pip install PyQt6
 ```
-
-## Usage
-
-See the example notebooks
 
 ### CNMF
 
