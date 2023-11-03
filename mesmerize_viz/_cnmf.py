@@ -598,6 +598,9 @@ class CNMFVizContainer:
 
         temporal = data_mapping[self.temporal_data_option]()
 
+        if ("norm" in self.temporal_data_option) or ("zscore" in self.temporal_data_option):
+            temporal = temporal[..., 0]
+
         rcm = data_mapping["rcm"]()
 
         shape = rcm.shape
