@@ -572,6 +572,9 @@ class CNMFVizContainer:
 
         self._set_params_text_area(index=start_index)
 
+        self._widget = None
+        self._sidecar = None
+
     def _get_selected_row(self) -> Union[int, None]:
         r1 = self.datagrid.selections[0]["r1"]
         r2 = self.datagrid.selections[0]["r2"]
@@ -1059,25 +1062,33 @@ class CNMFVizContainer:
         if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
             temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
             plots = HBox([temporals, self._image_widget.widget])
-            widget = VBox([self._top_widget, plots, self._tab_contours_eval])
+            self._widget = VBox([self._top_widget, plots, self._tab_contours_eval])
             if sidecar:
-                with Sidecar():
-                    return display(widget)
+                self._sidecar = Sidecar()
+                with self._sidecar:
+                    return display(self._widget)
             else:
-                return widget
+                return self._widget
 
         elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
             self.plot_temporal.show()
             self.plot_heatmap.show()
             self.image_widget.show()
 
-            widget = VBox([self._top_widget, self._tab_contours_eval])
+            self._widget = VBox([self._top_widget, self._tab_contours_eval])
 
-            return widget
+            return self._widget
         else:
             raise EnvironmentError(
                 "No available output context. Make sure you're running in jupyterlab or using %gui qt"
             )
+
+    def close(self):
+        self.plot_temporal.close()
+        self.plot_heatmap.close()
+        self.image_widget.close()
+        self._widget.close()
+        self._sidecar.close()
 
 
 @pd.api.extensions.register_dataframe_accessor("cnmf")
