@@ -59,8 +59,12 @@ def get_mcorr_data_mapping(series: pd.Series) -> dict:
 class McorrVizContainer:
     """Widget that contains the DataGrid, params text box and ImageWidget"""
     @property
-    def widget(self):
-        return self._widget
+    def image_widget(self) -> ImageWidget:
+        return self._image_widget
+
+    @property
+    def current_row(self) -> int:
+        return self._current_row
 
     def __init__(
         self,
@@ -142,7 +146,7 @@ class McorrVizContainer:
 
         df_show = self._dataframe[[c for c in columns if c not in hide_columns]]
 
-        self.datagrid = DataGrid(
+        self._datagrid = DataGrid(
             df_show,  # show only a subset
             selection_mode="cell",
             layout={"height": "250px", "width": "750px"},
@@ -152,8 +156,8 @@ class McorrVizContainer:
             **data_grid_kwargs
         )
 
-        self.params_text_area = Textarea()
-        self.params_text_area.layout = Layout(
+        self._params_text_area = Textarea()
+        self._params_text_area.layout = Layout(
             height="250px",
             max_height="250px",
             width="360px",
@@ -173,7 +177,8 @@ class McorrVizContainer:
         # default kwargs unless user has specified more
         default_iw_kwargs = {
             "window_funcs": {"t": (np.mean, 11)},
-            "cmap": "gnuplot2"
+            "cmap": "gnuplot2",
+            "grid_plot_kwargs": {"size": (700, 600)},
         }
 
         image_widget_kwargs = {
@@ -185,18 +190,18 @@ class McorrVizContainer:
         self.image_widget_kwargs = image_widget_kwargs
 
         self.reset_timepoint_on_change = reset_timepoint_on_change
-        self.image_widget: ImageWidget = None
+        self._image_widget: ImageWidget = None
 
         # try to guess the start index
         if start_index is None:
             start_index = dataframe[dataframe.algo == "mcorr"].iloc[0].name
 
-        self.current_row: int = start_index
+        self._current_row: int = start_index
 
         self._set_params_text_area(index=start_index)
 
         # set initial selected row
-        self.datagrid.select(
+        self._datagrid.select(
             row1=start_index,
             column1=0,
             row2=start_index,
@@ -205,39 +210,39 @@ class McorrVizContainer:
         )
 
         # callback when row changed
-        self.datagrid.observe(self._row_changed, names="selections")
+        self._datagrid.observe(self._row_changed, names="selections")
 
         # set the initial widget state with the start index
         data_arrays = self._get_row_data(index=start_index)
 
-        self.image_widget = ImageWidget(
+        self._image_widget = ImageWidget(
             data=data_arrays,
             names=self._data_options,
             **self.image_widget_kwargs
         )
 
         # mean window slider
-        self.slider_mean_window = IntSlider(
+        self._slider_mean_window = IntSlider(
             min=1,
             step=2,
             max=99,
-            value=self.image_widget.window_funcs["t"].window_size,  # set from the image widget
+            value=self._image_widget.window_funcs["t"].window_size,  # set from the image widget
             description="mean wind",
             description_tooltip="set a mean rolling window"
         )
-        self.slider_mean_window.observe(self._set_mean_window_size, "value")
+        self._slider_mean_window.observe(self._set_mean_window_size, "value")
 
         # TODO: mean diff checkbox
         # self._checkbox_mean_diff
 
-        self.sidecar = None
+        self._sidecar = None
         self._widget = None
 
     def _set_mean_window_size(self, change):
-        self.image_widget.window_funcs = {"t": (np.mean, change["new"])}
+        self._image_widget.window_funcs = {"t": (np.mean, change["new"])}
 
         # set same index, forces ImageWidget to run process_indices() so the image shown updates using the new window
-        self.image_widget.current_index = self.image_widget.current_index
+        self._image_widget.current_index = self._image_widget.current_index
 
     def _set_mean_diff(self, change):
         # TODO: will do later
@@ -275,8 +280,8 @@ class McorrVizContainer:
         return data_arrays
 
     def _get_selected_row(self) -> Union[int, None]:
-        r1 = self.datagrid.selections[0]["r1"]
-        r2 = self.datagrid.selections[0]["r2"]
+        r1 = self._datagrid.selections[0]["r1"]
+        r2 = self._datagrid.selections[0]["r2"]
 
         if r1 != r2:
             warn("Only single row selection is currently allowed")
@@ -284,7 +289,7 @@ class McorrVizContainer:
 
         # get corresponding dataframe index from currently visible dataframe
         # since filtering etc. is possible
-        index = self.datagrid.get_visible_data().index[r1]
+        index = self._datagrid.get_visible_data().index[r1]
 
         return index
 
@@ -293,7 +298,7 @@ class McorrVizContainer:
         if index is None:
             return
 
-        if self.current_row == index:
+        if self._current_row == index:
             return
 
         try:
@@ -301,20 +306,20 @@ class McorrVizContainer:
             data_arrays = self._get_row_data(index)
 
         except Exception as e:
-            self.params_text_area.value = f"{type(e).__name__}\n" \
+            self._params_text_area.value = f"{type(e).__name__}\n" \
                                           f"{str(e)}\n\n" \
                                           f"See jupyter log for details"
             raise e
 
         else:
             # no exceptions, set ImageWidget
-            self.image_widget.set_data(
+            self._image_widget.set_data(
                 new_data=data_arrays,
                 reset_vmin_vmax=False,
                 reset_indices=self.reset_timepoint_on_change
             )
             self._set_params_text_area(index)
-            self.current_row = index
+            self._current_row = index
 
     def _set_params_text_area(self, index):
         row = self._dataframe.iloc[index]
@@ -331,38 +336,56 @@ class McorrVizContainer:
             diffs = ""
 
         # diffs and full params
-        self.params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
+        self._params_text_area.value = diffs + format_params(self._dataframe.iloc[index].params, 0)
 
     def show(self, sidecar: bool = False):
         """
         Show the widget
         """
 
-        self.image_widget.reset_vmin_vmax()
+        self._image_widget.reset_vmin_vmax()
 
-        datagrid_params = HBox([self.datagrid, self.params_text_area])
+        datagrid_params = HBox([self._datagrid, self._params_text_area])
 
-        if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
-            self._widget = VBox([
+        if self._image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+            widget = VBox([
                     datagrid_params,
-                    self.image_widget.show(sidecar=False),
-                    self.slider_mean_window
+                    self._image_widget.show(sidecar=False),
+                    self._slider_mean_window
                 ])
 
+            # TODO: remove monkeypatch once the autoscale bug is fixed in fastplotlib
+            self._image_widget.gridplot[0, 0].auto_scale()
+
             if not sidecar:
-                return self.widget
+                return widget
 
-            if self.sidecar is None:
-                self.sidecar = Sidecar()
+            if self._sidecar is None:
+                self._sidecar = Sidecar()
 
-            with self.sidecar:
-                return display(self.widget)
+            with self._sidecar:
+                return display(widget)
 
-        elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+        elif self._image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
             # shown the image widget in Qt window
-            self.image_widget.show()
+            self._image_widget.show()
+            # TODO: remove monkeypatch once the autoscale bug is fixed in fastplotlib
+            self._image_widget.gridplot[0, 0].auto_scale()
             # return datagrid to show in jupyter
-            return datagrid_params
+            return VBox([datagrid_params, self._slider_mean_window])
+
+    def close(self):
+        """
+        Close the widget, performs cleanup
+        """
+
+        self._image_widget.close()
+        self._datagrid.close()
+        self._params_text_area.close()
+        self._slider_mean_window.close()
+
+        if self._sidecar is not None:
+            self._sidecar.close()
 
 
 @pd.api.extensions.register_dataframe_accessor("mcorr")
