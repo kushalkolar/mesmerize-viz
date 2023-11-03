@@ -1,6 +1,6 @@
 # mesmerize-viz
 
-This is currently in beta. Motion Correction and CNMF visualizations should just work.
+This is currently in beta. Motion Correction and CNMF visualizations should just work. CNMFE will work without `"rcb"` and `"residuals"` `image_data_options`
 
 https://www.youtube.com/watch?v=GWvaEeqA1hw
 
