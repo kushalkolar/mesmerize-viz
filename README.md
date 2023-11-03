@@ -26,7 +26,7 @@ See the example notebooks
 
 ### CNMF
 
-**Export parameter variants**
+**Explore parameter variants**
 
 https://github.com/kushalkolar/mesmerize-viz/assets/9403332/41175c80-7bdf-4210-96d4-4913ae46568e
 
