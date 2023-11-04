@@ -1091,7 +1091,8 @@ class CNMFVizContainer:
         self.plot_heatmap.close()
         self.image_widget.close()
         self._widget.close()
-        self._sidecar.close()
+        if self._sidecar is not None:
+            self._sidecar.close()
 
 
 @pd.api.extensions.register_dataframe_accessor("cnmf")
@@ -1122,17 +1123,17 @@ class CNMFDataFrameVizExtension:
         start_index: int
 
         temporal_data_option: optional, str
-            if not provided or ``None`: uses cnmf.get_temporal()
 
-            if zscore: uses zscore of cnmf.get_temporal()
-
-            if norm: uses 0-1 normalized output of cnmf.get_temporal()
-
-            if dfof: uses cnmf.get_dfof()
-
-            if dfof-zscore: uses cnmf.get_dfof() and then zscores
-
-            if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
+            +--------------------------+-------------------------------------------------------------------------------------------------------------------------+
+            | option                   | description                                                                                                             |
+            +==========================+=========================================================================================================================+
+            | not provided or ``None`` | uses ``cnmf.get_temporal()`` to return ``cnmf.estimates.C``, with or without residuals depending on ``temporal_kwargs`` |
+            | "zscore"                 | uses zscore of ``cnmf.get_tempral()``                                                                                   |
+            | "norm"                   | uses 0-1 normalized output of ``cnmf.get_temporal()``                                                                   |
+            | "dfof"                   | uses ``cnmf.get_detrend_dfof()``. You must have called ``run_detrend_dfof()`` beforehand                                |
+            | "dfof-zscore"            | returns zscore of dfof                                                                                                  |
+            | "dfof-norm"              | returns 0-1 normalized dfof                                                                                             |
+            +--------------------------+-------------------------------------------------------------------------------------------------------------------------+
 
         image_data_options: list of str
             default: ["input", "rcm", "rcb", "residuals"]
