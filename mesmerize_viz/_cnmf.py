@@ -217,14 +217,26 @@ class EvalController:
         self._block_handlers = True
         for metric in self._float_metrics:
             metric_array = getattr(cnmf_obj.estimates, self._metric_array_mapping[metric])
-            for kind in ["slider", "spinbox"]:
-                # allow 100 steps
-                self._widgets[metric][kind].step = np.ptp(metric_array) / 100
-                self._widgets[metric][kind].min = metric_array.min()
-                self._widgets[metric][kind].max = metric_array.max()
-                self._widgets[metric][kind].value = cnmf_obj.params.get_group("quality")[metric]
+            if metric_array.size == 0:  # for example, cnn_preds is an empty array for CNMFE
+                for ui_element in ["slider", "spinbox"]:
+                    self._widgets[metric][ui_element].disabled = True
+            else:
+                for ui_element in ["slider", "spinbox"]:
+                    self._widgets[metric][ui_element].disabled = False
+                    # allow 100 steps
+                    self._widgets[metric][ui_element].step = np.ptp(metric_array) / 100
+                    self._widgets[metric][ui_element].min = metric_array.min()
+                    self._widgets[metric][ui_element].max = metric_array.max()
+                    self._widgets[metric][ui_element].value = cnmf_obj.params.get_group("quality")[metric]
 
-        self.use_cnn_checkbox.value = cnmf_obj.params.get_group("quality")["use_cnn"]
+        if cnmf_obj.estimates.cnn_preds.size == 0:
+            # cnn_preds is not present, force use_cnn = False, disable the UI
+            self.use_cnn_checkbox.value = False
+            self.use_cnn_checkbox.disabled = True
+        else:
+            # cnn_preds is a real array, allow it to be settable
+            self.use_cnn_checkbox.disabled = False
+            self.use_cnn_checkbox.value = cnmf_obj.params.get_group("quality")["use_cnn"]
 
         self._block_handlers = False
 
