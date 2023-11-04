@@ -217,7 +217,7 @@ class EvalController:
         self._block_handlers = True
         for metric in self._float_metrics:
             metric_array = getattr(cnmf_obj.estimates, self._metric_array_mapping[metric])
-            if metric_array.size == 0:  # for example, cnn_preds is an empty array for CNMFE
+            if len(metric_array) == 0:  # for example, cnn_preds is an empty array for CNMFE
                 for ui_element in ["slider", "spinbox"]:
                     self._widgets[metric][ui_element].disabled = True
             else:
@@ -229,7 +229,7 @@ class EvalController:
                     self._widgets[metric][ui_element].max = metric_array.max()
                     self._widgets[metric][ui_element].value = cnmf_obj.params.get_group("quality")[metric]
 
-        if cnmf_obj.estimates.cnn_preds.size == 0:
+        if len(cnmf_obj.estimates.cnn_preds) == 0:
             # cnn_preds is not present, force use_cnn = False, disable the UI
             self.use_cnn_checkbox.value = False
             self.use_cnn_checkbox.disabled = True
@@ -839,9 +839,11 @@ class CNMFVizContainer:
             lambda change: self.set_component_index(change["new"]), "value"
         )
 
-        metrics = (f"snr: {self._cnmf_obj.estimates.SNR_comp[index]:.02f}, "
-                   f"r_values: {self._cnmf_obj.estimates.r_values[index]:.02f}, "
-                   f"cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} ")
+        metrics = f"snr: {self._cnmf_obj.estimates.SNR_comp[index]:.02f}, " \
+                  f"r_values: {self._cnmf_obj.estimates.r_values[index]:.02f}"
+
+        if len(self._cnmf_obj.estimates.cnn_preds) > 0:
+            metrics += f", cnn: {self._cnmf_obj.estimates.cnn_preds[index]:.02f} "
 
         self._component_metrics_text.value = metrics
 
