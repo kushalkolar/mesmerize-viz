@@ -173,9 +173,10 @@ class EvalController:
         param_entries = list()
 
         for metric in self._float_metrics:
-            slider = FloatSlider(value=0, min=0, max=1, step=0.01, description=metric)
+            # start with very high and very low values so that min >! max ever with real data 
+            slider = FloatSlider(value=0, min=-99_999, max=99_999, step=0.01, description=metric)
             spinbox = BoundedFloatText(
-                value=0, min=0, max=1, step=0.01,
+                value=0, min=-99_999, max=99_999, step=0.01,
                 description_tooltip=metric, layout=Layout(width="70px"), readout_format='.2f',
             )
 
