@@ -1,3 +1,0 @@
-mesmerize-core
-fastplotlib
-ipydatagrid
