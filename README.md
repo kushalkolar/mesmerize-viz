@@ -2,6 +2,8 @@
 
 This is currently in beta and documentation is a WIP. Motion Correction and CNMF visualizations should just work. CNMFE will work without `"rcb"` and `"residuals"` `image_data_options`.
 
+:exclamation: **Harware requirements** The large CNMF visualizations with contours etc. usually require either a dedicated GPU or integrated GPU with access to at least 1GB of VRAM. 
+
 https://www.youtube.com/watch?v=GWvaEeqA1hw
 
 ## Installation
