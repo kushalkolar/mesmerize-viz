@@ -531,7 +531,7 @@ class CNMFVizContainer:
         self._dropdown_contour_colors.observe(self._ipywidget_set_component_colors, "value")
 
         self._radio_visible_components = RadioButtons(
-            options=["all", "accepted", "rejected"],
+            options=["all", "accepted", "rejected", "none"],
             description_tooltip="contours to make visible",
             description="visible contours"
         )
@@ -978,6 +978,10 @@ class CNMFVizContainer:
         elif visible == "rejected":
             contours[cnmf_obj.estimates.idx_components].colors[:, -1] = alpha_invisible
 
+        elif visible == "none":
+            # make everything invisible
+            contours[:].colors[:, -1] = 0
+            
         else:
             # make everything visible
             contours[:].colors[:, -1] = 1
