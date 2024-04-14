@@ -60,9 +60,6 @@ https://github.com/kushalkolar/mesmerize-viz/assets/9403332/0e7b0b41-9360-456c-9
 
 ## Voila app
 
-WIP
-### Explore components**
-
 Install voila:
 
 ```bash
@@ -76,4 +73,4 @@ cd mesmerize-viz
 voila examples/app.ipynb --enable_nbextensions=True
 ```
 
-Note that the voila app is a WIP prototype
+Note that the voila app is a prototype
