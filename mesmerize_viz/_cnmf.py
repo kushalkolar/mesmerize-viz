@@ -3,11 +3,11 @@ from functools import partial
 from typing import *
 from warnings import warn
 
-
 import numpy as np
 import pandas as pd
 from ipydatagrid import DataGrid
-from ipywidgets import Button, Tab, Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, BoundedFloatText, IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
+from ipywidgets import Button, Tab, Text, Textarea, Layout, HBox, VBox, Checkbox, FloatSlider, BoundedFloatText, \
+    IntSlider, BoundedIntText, RadioButtons, Dropdown, jslink
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance, TimeSeriesScalerMinMax
 import fastplotlib as fpl
 from fastplotlib.utils import get_cmap
@@ -17,10 +17,9 @@ from sidecar import Sidecar
 
 from mesmerize_core.caiman_extensions.cnmf import cnmf_cache
 from mesmerize_core import CNMFExtensions
-
+from ._store_model import TimeStore, NeuronStore
 
 from ._utils import DummyMovie, format_params
-
 
 IMAGE_OPTIONS = [
     "input",
@@ -36,7 +35,6 @@ rcm_rcb_proj_options = list()
 for option in ["rcm", "rcb"]:
     for proj in ["mean", "min", "max", "std"]:
         rcm_rcb_proj_options.append(f"{option}-{proj}")
-
 
 IMAGE_OPTIONS += rcm_rcb_proj_options
 
@@ -278,13 +276,13 @@ class CNMFVizContainer:
         return self._component_index
 
     @property
-    def plot_temporal(self) -> fpl.Plot:
-        """Plot with the single temporal trace"""
+    def plot_temporal(self) -> fpl.Figure:
+        """Figure with the single temporal trace"""
         return self._plot_temporal
 
     @property
-    def plot_heatmap(self) -> fpl.Plot:
-        """Plot with the heatmap"""
+    def plot_heatmap(self) -> fpl.Figure:
+        """Figure with the heatmap"""
         return self._plot_heatmap
 
     @property
@@ -298,57 +296,188 @@ class CNMFVizContainer:
         return self._cnmf_obj
 
     def __init__(
-        self,
-        dataframe: pd.DataFrame,
-        start_index: int = None,
-        temporal_data_option: str = None,
-        image_data_options: list[str] = None,
-        temporal_kwargs: dict = None,
-        reset_timepoint_on_change: bool = False,
-        input_movie_kwargs: dict = None,
-        image_widget_kwargs=None,
-        data_grid_kwargs: dict = None,
+            self,
+            dataframe: pd.DataFrame,
+            start_index: int = None,
+            temporal_data_option: str = None,
+            image_data_options: list[str] = None,
+            temporal_kwargs: dict = None,
+            reset_timepoint_on_change: bool = False,
+            input_movie_kwargs: dict = None,
+            image_widget_kwargs=None,
+            data_grid_kwargs: dict = None,
     ):
         """
-        Visualize CNMF output and other data columns such as behavior video (optional).
+        Visualize CNMF output and other data columns, such as behavior video (optional).
 
-        Note: If using dfof temporal_data_option, you must have already run dfof.
+        Note: If using `dfof` for `temporal_data_option`, you must have already run dfof.
 
         Parameters
         ----------
-        dataframe: pd.DataFrame
+        dataframe : pd.DataFrame
+            Input data to be visualized.
 
-        start_index: int
+        start_index : int
+            Start index for the initial data displayed in the visualization.
 
-        temporal_data_option: optional, str
-            if not provided or ``None`: uses cnmf.get_temporal()
+        temporal_data_option : str, optional
+            Defines the temporal data option to use:
 
-            if zscore: uses zscore of cnmf.get_temporal()
+            +------------------+--------------------------------------------------------------------------+
+            | Option           | Description                                                              |
+            +==================+==========================================================================+
+            | None             | Default. Uses `cnmf.get_temporal()`                                      |
+            +------------------+--------------------------------------------------------------------------+
+            | zscore           | Uses the z-score of `cnmf.get_temporal()`                                |
+            +------------------+--------------------------------------------------------------------------+
+            | norm             | Uses 0-1 normalized output of `cnmf.get_temporal()`                      |
+            +------------------+--------------------------------------------------------------------------+
+            | dfof             | Uses `cnmf.get_dfof()`                                                  |
+            +------------------+--------------------------------------------------------------------------+
+            | dfof-zscore      | Uses `cnmf.get_dfof()` and applies z-scoring                             |
+            +------------------+--------------------------------------------------------------------------+
+            | dfof-norm        | Uses `cnmf.get_dfof()` and applies 0-1 normalization                     |
+            +------------------+--------------------------------------------------------------------------+
 
-            if norm: uses 0-1 normalized output of cnmf.get_temporal()
+        reset_timepoint_on_change : bool, default False
+            If `True`, resets the timepoint in the ImageWidget when changing items/rows.
 
-            if dfof: uses cnmf.get_dfof()
+        temporal_kwargs : dict, optional
+            Additional keyword arguments passed to `cnmf.get_temporal()`. Ignored if `temporal_data_option` contains "dfof".
 
-            if dfof-zscore: uses cnmf.get_dfof() and then zscores
+            +-------------------+---------------------------------------------------------------+
+            | Argument          | Description                                                   |
+            +===================+===============================================================+
+            | component_indices | str or np.ndarray, optional                                   |
+            |                   | Specifies which components to include:                        |
+            |                   | - `None` or "all": includes all components                    |
+            |                   | - "good": uses good components (Estimates.idx_components)     |
+            |                   | - "bad": uses bad components (Estimates.idx_components_bad)   |
+            |                   | - np.ndarray: uses the specified indices                      |
+            +-------------------+---------------------------------------------------------------+
+            | add_background    | bool, default: False                                          |
+            |                   | If `True`, adds the temporal background (cnmf.estimates.f)    |
+            +-------------------+---------------------------------------------------------------+
+            | add_residuals     | bool, default: False                                          |
+            |                   | If `True`, adds residuals (cnmf.estimates.YrA)                |
+            +-------------------+---------------------------------------------------------------+
+            | return_copy       | bool                                                          |
+            |                   | If `True`, returns a copy of the cached value.                |
+            |                   | If `False`, returns the cached object directly (not           |
+            |                   | recommended, may cause unexpected behavior).                  |
+            +-------------------+---------------------------------------------------------------+
 
-            if dfof-norm: uses cnmf.get_dfof() and then 0-1 normalizes
+        input_movie_kwargs: dict, optional
+            Arguments passed to mesmerize_core.caiman.get_input_movie. Valid data options are:
 
-        reset_timepoint_on_change: bool, default False
-            reset the timepoint in the ImageWidget when changing items/rows
+            +----------+---------------------------------------------------------------+
+            | Argument | Description                                                   |
+            +==========+===============================================================+
+            | reader   | callable                                                      |
+            |          | Function to read the input movie path and return an array-like|
+            +----------+---------------------------------------------------------------+
+            | **kwargs | passed to reader function                                     |
+            +----------+---------------------------------------------------------------+
 
-        temporal_kwargs: dict
-            kwargs passed to cnmf.get_temporal(), example: {"add_residuals" : True}.
-            Ignored if temporal_data_option contains "dfof"
+            `mesmerize_core.get_input_movie() <https://mesmerize-core.readthedocs.io/en/latest/api/common.html#mesmerize_core.CaimanSeriesExtensions.get_input_movie>`_
 
-        input_movie_kwargs: dict
-            kwargs passed to caiman.get_input()
+        image_widget_kwargs : dict, optional
+            Arguments passed to ImageWidget. Valid options include:
 
-        image_widget_kwargs: dict
-            kwargs passed to ImageWidget
+            +-------------------+-----------------------------------------------------+
+            | Argument          | Description                                         |
+            +===================+=====================================================+
+            | data              | array-like or list of array-like data to display    |
+            +-------------------+-----------------------------------------------------+
+            | window_funcs      | dictionary of window functions for "t" or "z"       |
+            |                   | dimensions in format {"dim": (func, window_size)}   |
+            |                   | e.g., {"t": (np.mean, 11)}, {"z": (np.max, 3)}      |
+            +-------------------+-----------------------------------------------------+
+            | frame_apply       | function(s) applied to each data array to generate  |
+            |                   | final 2D image, can be callable or {idx: callable}  |
+            +-------------------+-----------------------------------------------------+
+            | figure_shape      | tuple for custom shape of the figure,               |
+            |                   | defaults to auto-estimation                         |
+            +-------------------+-----------------------------------------------------+
+            | figure_kwargs     | dictionary of arguments passed to GridPlot          |
+            +-------------------+-----------------------------------------------------+
+            | names             | optional list of names for subplots                 |
+            +-------------------+-----------------------------------------------------+
+            | histogram_widget  | boolean to create a histogram LUT widget per subplot|
+            +-------------------+-----------------------------------------------------+
+            | rgb               | boolean or list indicating if arrays are RGB(A)     |
+            +-------------------+-----------------------------------------------------+
+            | graphic_kwargs    | arguments passed to each ImageGraphic in subplots   |
+            +-------------------+-----------------------------------------------------+
 
             Example: `image_widget_kwargs={"cmap": "viridis"}`
 
-        data_grid_kwargs
+        data_grid_kwargs : dict, optional
+            Arguments passed to DataGrid. Valid options include:
+
+            +-------------------------+-----------------------------------------------------------+
+            | Argument                | Description                                               |
+            +=========================+===========================================================+
+            | base_row_size           | int, default: 20                                          |
+            |                         | Default row height                                        |
+            +-------------------------+-----------------------------------------------------------+
+            | base_column_size        | int, default: 64                                          |
+            |                         | Default column width                                      |
+            +-------------------------+-----------------------------------------------------------+
+            | base_row_header_size    | int, default: 64                                          |
+            |                         | Default row header width                                  |
+            +-------------------------+-----------------------------------------------------------+
+            | base_column_header_size | int, default: 20                                          |
+            |                         | Default column header height                              |
+            +-------------------------+-----------------------------------------------------------+
+            | header_visibility       | {'all', 'row', 'column', 'none'}, default: 'all'          |
+            |                         | Controls header visibility mode                           |
+            +-------------------------+-----------------------------------------------------------+
+            | dataframe               | pandas.DataFrame                                          |
+            |                         | Data displayed in the DataGrid                            |
+            +-------------------------+-----------------------------------------------------------+
+            | renderers               | dict                                                      |
+            |                         | Custom renderers for cells by column name                 |
+            +-------------------------+-----------------------------------------------------------+
+            | default_renderer        | CellRenderer, default: TextRenderer                       |
+            |                         | Default renderer for cell rendering                       |
+            +-------------------------+-----------------------------------------------------------+
+            | header_renderer         | CellRenderer, default: TextRenderer                       |
+            |                         | Renderer for header cells                                 |
+            +-------------------------+-----------------------------------------------------------+
+            | corner_renderer         | CellRenderer, default: TextRenderer                       |
+            |                         | Renderer for corner header cells                          |
+            +-------------------------+-----------------------------------------------------------+
+            | selection_mode          | {'row', 'column', 'cell', 'none'}, default: 'none'        |
+            |                         | Mode for cell selection by user or programmatically       |
+            +-------------------------+-----------------------------------------------------------+
+            | selections              | list of dict                                              |
+            |                         | Rectangular regions defined by row/column start & end     |
+            +-------------------------+-----------------------------------------------------------+
+            | editable                | bool, default: False                                      |
+            |                         | Enables direct cell editing                               |
+            +-------------------------+-----------------------------------------------------------+
+            | column_widths           | dict of {str: int}, default: {}                           |
+            |                         | Custom widths for columns by name                         |
+            +-------------------------+-----------------------------------------------------------+
+            | auto_fit_columns        | bool, default: False                                      |
+            |                         | Automatically adjust column widths                        |
+            +-------------------------+-----------------------------------------------------------+
+            | auto_fit_params         | dict                                                      |
+            |                         | Parameters for column auto-fitting                        |
+            +-------------------------+-----------------------------------------------------------+
+            | grid_style              | dict of {propertyName: str | VegaExpr | dict}             |
+            |                         | Global styling properties for the grid                    |
+            +-------------------------+-----------------------------------------------------------+
+            | index_name              | str, default: "key"                                       |
+            |                         | Name of the index column (set once at construction)       |
+            +-------------------------+-----------------------------------------------------------+
+            | horizontal_stripes      | bool, default: False                                      |
+            |                         | Themed coloring for alternate grid rows                   |
+            +-------------------------+-----------------------------------------------------------+
+            | vertical_stripes        | bool, default: False                                      |
+            |                         | Themed coloring for alternate grid columns                |
+            +-------------------------+-----------------------------------------------------------+
         """
 
         self._dataframe = dataframe
@@ -452,7 +581,7 @@ class CNMFVizContainer:
 
         default_image_widget_kwargs = {
             "cmap": "gnuplot2",
-            "grid_plot_kwargs": {"size": (720, 602)},
+            "figure_kwargs": {"size": (720, 602)},
         }
 
         self.image_widget_kwargs = {
@@ -477,15 +606,12 @@ class CNMFVizContainer:
         # callback when row changed
         self.datagrid.observe(self._row_changed, names="selections")
 
-        # ipywidgets for selecting components
-        self.component_slider = IntSlider(min=0, max=1, value=0, step=1, description="component index:")
-        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1, layout=Layout(width="100px"))
-        for trait in ["value", "max"]:
-            jslink((self.component_slider, trait), (self.component_int_box, trait))
+        self._time_store = TimeStore()
+        self._neuron_store = NeuronStore()
 
-        self.component_int_box.observe(
-            lambda change: self.set_component_index(change["new"]), "value"
-        )
+        # ipywidgets for selecting components
+        self.component_int_box = BoundedIntText(min=0, max=1, value=0, step=1, layout=Layout(width="100px"))
+        self._neuron_store.subscribe(self.component_int_box)
 
         self._component_metrics_text = Text(
             value="",
@@ -495,9 +621,7 @@ class CNMFVizContainer:
             layout=Layout(width="350px")
         )
 
-        self._button_center_component = Button(
-            description="center on component",
-        )
+        self._button_center_component = Button(description="center on component",)
         self._button_center_component.on_click(self._center_on_component)
 
         # checkbox to zoom into components when selected
@@ -506,6 +630,7 @@ class CNMFVizContainer:
             description="auto-zoom component",
             description_tooltip="If checked, zoom into selected component"
         )
+        self.checkbox_zoom_components.observe(self._neuron_store._set_auto_zoom, "value")
         # zoom factor
         self.zoom_components_scale = FloatSlider(
             min=0.25,
@@ -515,10 +640,11 @@ class CNMFVizContainer:
             description="zoom scale",
             description_tooltip="zoom scale as a factor of component width/height"
         )
+        self.zoom_components_scale.observe(self._neuron_store._set_zoom_scale, "value")
         # organize these widgets to be shown at the top
         self._top_widget = VBox([
             HBox([self.datagrid, self.params_text_area]),
-            HBox([self.component_slider, self.component_int_box, self._component_metrics_text]),
+            HBox([self.component_int_box, self._component_metrics_text]),
             HBox([self._button_center_component, self.checkbox_zoom_components, self.zoom_components_scale])
         ])
 
@@ -565,18 +691,12 @@ class CNMFVizContainer:
         self._tab_contours_eval.titles = ["contour colors", "eval params"]
 
         # plots
-        self._plot_temporal = fpl.Plot(size=(500, 120))
-        self._plot_temporal.camera.maintain_aspect = False
-        self._plot_heatmap = fpl.Plot(size=(500, 450))
-        self._plot_heatmap.camera.maintain_aspect = False
+        self._plot_temporal = fpl.Figure(size=(500, 120))
+        self._plot_temporal[0, 0].camera.maintain_aspect = False
+        self._plot_heatmap = fpl.Figure(size=(500, 450))
+        self._plot_heatmap[0, 0].camera.maintain_aspect = False
 
         self._image_widget: fpl.ImageWidget = None
-
-        self._synchronizer = fpl.Synchronizer(key_bind=None)
-
-        self._contour_graphics: List[fpl.LineCollection] = list()
-
-        self._component_index = 0
 
         self._cnmf_obj: CNMF = None
 
@@ -682,39 +802,30 @@ class CNMFVizContainer:
             self.current_row = index
 
     def _set_data(self, data_arrays: Dict[str, np.ndarray]):
-        self._contour_graphics.clear()
-
-        self._synchronizer.clear()
 
         self._plot_temporal.clear()
         self._plot_heatmap.clear()
 
         # make our temporal plots first, else image widget slider events could trigger linear selectors
         self._temporal_data = data_arrays["temporal"]
+        self._plot_temporal[0, 0].add_line(self._temporal_data[0], name="line")
+        self._neuron_store.subscribe(self._plot_temporal[0, 0], data=self._temporal_data)
 
-        # make temporal graphics
-        self._plot_temporal.add_line(self._temporal_data[0], name="line")
         # autoscale the single temporal line plot when the data changes
-        self._plot_temporal["line"].data.add_event_handler(self._plot_temporal.auto_scale)
-        self._plot_heatmap.add_heatmap(self._temporal_data, name="heatmap")
+        self._plot_temporal[0, 0]["line"].add_event_handler(self._plot_temporal[0, 0].auto_scale)
+        self._plot_heatmap[0, 0].add_image(self._temporal_data, name="heatmap",)
+        self._plot_heatmap[0, 0]['heatmap'].add_event_handler(self._plot_heatmap[0, 0].auto_scale)
 
-        self._component_linear_selector: fpl.LinearSelector = self._plot_heatmap["heatmap"].add_linear_selector(axis="y", thickness=5)
-        self._component_linear_selector.selection.add_event_handler(self.set_component_index)
+        # component selectors
+        self._component_linear_selector: fpl.LinearSelector = self._plot_heatmap[0, 0]['heatmap'].add_linear_selector(axis="y", thickness=5)
+        self._neuron_store.subscribe(self._component_linear_selector)
 
         # linear selectors and events
-        self._linear_selector_temporal: fpl.LinearSelector = self._plot_temporal["line"].add_linear_selector()
-        self._linear_selector_temporal.selection.add_event_handler(self._set_frame_index_from_linear_selector)
+        self._linear_selector_temporal: fpl.LinearSelector = self._plot_temporal[0, 0]["line"].add_linear_selector()
+        self._linear_selector_heatmap: fpl.LinearSelector = self._plot_heatmap[0, 0]["heatmap"].add_linear_selector()
 
-        self._linear_selector_heatmap: fpl.LinearSelector = self._plot_heatmap["heatmap"].add_linear_selector()
-
-        # TODO: This is a temporary monkey patch until next release of fastplotlib
-        self._component_linear_selector._initial_controller_state = True
-        self._linear_selector_temporal._initial_controller_state = True
-        self._linear_selector_heatmap._initial_controller_state = True
-
-        # sync the linear selectors
-        self._synchronizer.add(self._linear_selector_temporal)
-        self._synchronizer.add(self._linear_selector_heatmap)
+        self._time_store.subscribe(self._linear_selector_temporal,)
+        self._time_store.subscribe(self._linear_selector_heatmap,)
 
         if self._image_widget is None:
             self._image_widget = fpl.ImageWidget(
@@ -722,8 +833,7 @@ class CNMFVizContainer:
                 names=self._image_data_options,
                 **self.image_widget_kwargs
             )
-
-            self._image_widget.gridplot.renderer.add_event_handler(self._manual_toggle_component, "key_down")
+            self._time_store.subscribe(self._image_widget,)
 
             # need to start it here so that we can access the toolbar to link events with the slider
             self._image_widget.show()
@@ -739,17 +849,10 @@ class CNMFVizContainer:
             for g in self._image_widget.managed_graphics:
                 g.registered_callbacks.clear()
 
-            for subplot in self._image_widget.gridplot:
+            for subplot in self._image_widget.figure:
                 if "contours" in subplot:
                     # delete the contour graphics
                     subplot.delete_graphic(subplot["contours"])
-
-        # absolute garbage monkey patch which I will fix once we make ImageWidget emit its own events
-        if hasattr(self._image_widget.sliders["t"], "qslider"):
-            self._image_widget.sliders["t"].qslider.valueChanged.connect(self._set_linear_selector_index_from_image_widget)
-        else:
-            # ipywidget
-            self._image_widget.sliders["t"].observe(self._set_linear_selector_index_from_image_widget, "value")
 
         contours = data_arrays["contours"][0]
 
@@ -757,30 +860,16 @@ class CNMFVizContainer:
         self._random_colors = np.random.rand(n_components, 4).astype(np.float32)
         self._random_colors[:, -1] = 1
 
-        for subplot in self._image_widget.gridplot:
-            contour_graphic = subplot.add_line_collection(
+        for subplot in self._image_widget.figure:
+            subplot.add_line_collection(
                 contours,
                 colors=self._random_colors,
                 name="contours"
             )
-            self._contour_graphics.append(contour_graphic)
-
-            image_graphic = subplot["image_widget_managed"]
-
-            image_graphic.link(
-                "click",
-                target=contour_graphic,
-                feature="thickness",
-                new_data=5,
-                callback=self._euclidean
-            )
-
-            # contour_graphic.link("colors", target=contour_graphic, feature="thickness", new_data=2)
+            self._neuron_store.subscribe(subplot)
 
         self.component_int_box.value = 0
-        self.component_slider.value = 0
         self.component_int_box.max = n_components - 1
-        self.component_slider.max = n_components - 1
 
         # current state of CNMF object
         # this can be different from the one in the dataframe if the user uses eval
@@ -788,48 +877,7 @@ class CNMFVizContainer:
 
         self._eval_controller.set_limits(self._cnmf_obj)
 
-    def _euclidean(self, source, target, event, new_data):
-        """maps click events to contour"""
-        # calculate coms of line collection
-        indices = np.array(event.pick_info["index"])
-
-        coms = list()
-
-        for contour in target.graphics:
-            coors = contour.data()[~np.isnan(contour.data()).any(axis=1)]
-            com = coors.mean(axis=0)
-            coms.append(com)
-
-        # euclidean distance to find closest index of com
-        indices = np.append(indices, [0])
-
-        ix = int(np.linalg.norm((coms - indices), axis=1).argsort()[0])
-
-        self.set_component_index(ix)
-
-        return None
-
     def set_component_index(self, index):
-        if hasattr(index, "pick_info"):
-            # came from heatmap component selector
-            if index.pick_info["pygfx_event"] is None:
-                # this means that the selector was not triggered by the user but that it moved due to another event
-                # so then we don't set_component_index because then infinite recursion
-                return
-            index = index.pick_info["selected_index"]
-
-        for g in self._contour_graphics:
-            g.set_feature(feature="thickness", new_data=8, indices=index)
-
-        self._plot_temporal["line"].data = self._temporal_data[index]
-
-        # set the component index property
-        self._component_index = index
-
-        if self._component_linear_selector._move_info is None:
-            # TODO: Very hacky for now, ignores if the slider is currently being moved by the user
-            # prevents weird slider movement
-            self._component_linear_selector.selection = index
 
         if self.checkbox_zoom_components.value:
             self._zoom_into_component(index)
@@ -848,32 +896,14 @@ class CNMFVizContainer:
 
         self._component_metrics_text.value = metrics
 
-    def _zoom_into_component(self, index: int):
-        for subplot in self._image_widget.gridplot:
-            subplot.camera.show_object(
-                subplot["contours"].graphics[index].world_object,
-                scale=self.zoom_components_scale.value
-            )
+    def _set_zoom_flag(self, value: bool):
+        self._neuron_store._set_auto_zoom(value)
+
+    def _set_zoom_scale(self, scale):
+        self._neuron_store.zoom_scale = scale
 
     def _center_on_component(self, obj):
-        self._zoom_into_component(self.component_index)
-
-    def _set_frame_index_from_linear_selector(self, ev):
-        # TODO: hacky mess, need to make ImageWidget emit events
-        ix = ev.pick_info["selected_index"]
-        self._image_widget.sliders["t"].value = ix
-
-    def _set_linear_selector_index_from_image_widget(self, ev):
-        if isinstance(ev, dict):
-            # ipywidget
-            ix = ev["new"]
-
-        # else it's directly from Qt slider
-        else:
-            ix = ev
-
-        self._linear_selector_temporal.selection = ix
-        self._linear_selector_heatmap.selection = ix
+        self._neuron_store.zoom_into_component()
 
     def _ipywidget_set_component_colors(self, *args):
         """just a wrapper to make ipywidgets happy"""
@@ -905,11 +935,11 @@ class CNMFVizContainer:
 
         """
         cnmf_obj = self._cnmf_obj
-        n_contours = len(self._image_widget.gridplot[0, 0]["contours"])
+        n_contours = len(self._image_widget.figure[0, 0]["contours"])
 
         # use the random colors
         if metric == "random":
-            for subplot in self._image_widget.gridplot:
+            for subplot in self._image_widget.figure:
                 for i, g in enumerate(subplot["contours"].graphics):
                     g.colors = self._random_colors[i]
 
@@ -952,7 +982,7 @@ class CNMFVizContainer:
             else:
                 raise ValueError("Invalid colors value")
 
-        for subplot in self._image_widget.gridplot:
+        for subplot in self._image_widget.figure:
             # first initialize using a quantitative cmap
             # this ensures that setting cmap_values will work
             subplot["contours"].cmap = "gray"
@@ -962,6 +992,7 @@ class CNMFVizContainer:
                 color = get_cmap(cmap)[0]  # set using first color in cmap
                 subplot["contours"][:].colors = color
             else:
+                # change to cmap_transform when fpl pr #663 is merged
                 subplot["contours"].cmap_values = classifier
                 subplot["contours"].cmap = cmap
 
@@ -981,7 +1012,7 @@ class CNMFVizContainer:
         elif visible == "none":
             # make everything invisible
             contours[:].colors[:, -1] = 0
-            
+
         else:
             # make everything visible
             contours[:].colors[:, -1] = 1
@@ -1081,9 +1112,9 @@ class CNMFVizContainer:
 
         """
 
-        if self.image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+        if self.image_widget.figure.canvas.__class__.__name__ in ["JupyterWgpuCanvas", "JupyterRenderCanvas"]:
             temporals = VBox([self._plot_temporal.show(), self._plot_heatmap.show()])
-            plots = HBox([temporals, self._image_widget.widget])
+            plots = HBox([temporals, self._image_widget.show()])
             self._widget = VBox([self._top_widget, plots, self._tab_contours_eval])
             if sidecar:
                 self._sidecar = Sidecar()
@@ -1092,7 +1123,7 @@ class CNMFVizContainer:
             else:
                 return self._widget
 
-        elif self.image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+        elif self.image_widget.figure.canvas.__class__.__name__ in ["QWgpuCanvas", "QRenderCanvas"]:
             self.plot_temporal.show()
             self.plot_heatmap.show()
             self.image_widget.show()
@@ -1120,15 +1151,15 @@ class CNMFDataFrameVizExtension:
         self._dataframe = df
 
     def viz(
-        self,
-        start_index: int = None,
-        temporal_data_option: str = None,
-        image_data_options: list[str] = None,
-        temporal_kwargs: dict = None,
-        reset_timepoint_on_change: bool = False,
-        input_movie_kwargs: dict = None,
-        image_widget_kwargs: dict = None,
-        data_grid_kwargs: dict = None,
+            self,
+            start_index: int = None,
+            temporal_data_option: str = None,
+            image_data_options: list[str] = None,
+            temporal_kwargs: dict = None,
+            reset_timepoint_on_change: bool = False,
+            input_movie_kwargs: dict = None,
+            image_widget_kwargs: dict = None,
+            data_grid_kwargs: dict = None,
     ):
         """
         Visualize CNMF output and other data columns such as behavior video (optional).
@@ -1193,6 +1224,9 @@ class CNMFDataFrameVizExtension:
             kwargs passed to ImageWidget
 
             Example: `image_widget_kwargs={"cmap": "viridis"}`
+
+        data_grid_kwargs: dict
+            kwargs passed to ipywidgets.DataGrid()
         """
 
         container = CNMFVizContainer(

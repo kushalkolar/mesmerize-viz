@@ -69,7 +69,7 @@ class McorrVizContainer:
     def __init__(
         self,
             dataframe: pd.DataFrame,
-            data_options: List[str] = None,
+            image_data_options: List[str] = None,
             start_index: int = None,
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs: dict = None,
@@ -81,7 +81,7 @@ class McorrVizContainer:
 
         Parameters
         ----------
-        data_options: list of str, default ["input", "mcorr", "mean", "corr"]
+        image_data_options: list of str, default ["input", "mcorr", "mean", "corr"]
             list of data to plot, valid options are:
 
             +-------------+-------------------------------------+
@@ -103,19 +103,124 @@ class McorrVizContainer:
             reset the timepoint in the ImageWidget when changing items/rows
 
         input_movie_kwargs: dict, optional
-            kwargs passed to get_input_movie()
+            Arguments passed to mesmerize_core.caiman.get_input_movie. Valid data options are:
+
+            +----------+---------------------------------------------------------------+
+            | Argument | Description                                                   |
+            +==========+===============================================================+
+            | reader   | callable                                                      |
+            |          | Function to read the input movie path and return an array-like|
+            +----------+---------------------------------------------------------------+
+            | **kwargs | passed to reader function                                     |
+            +----------+---------------------------------------------------------------+
+
+            `mesmerize_core.get_input_movie() <https://mesmerize-core.readthedocs.io/en/latest/api/common.html#mesmerize_core.CaimanSeriesExtensions.get_input_movie>`_
 
         image_widget_kwargs: dict, optional
-            kwargs passed to ImageWidget
+            Arguments passed to ImageWidget. Valid options are:
 
-        data_grid_kwargs: dict, optional
-            kwargs passed to DataGrid()
+            +-------------------+-----------------------------------------------------+
+            | Argument          | Description                                         |
+            +===================+=====================================================+
+            | data              | array-like or list of array-like data to display    |
+            +-------------------+-----------------------------------------------------+
+            | window_funcs      | dictionary of window functions for "t" or "z"       |
+            |                   | dimensions in format {"dim": (func, window_size)}   |
+            |                   | e.g., {"t": (np.mean, 11)}, {"z": (np.max, 3)}      |
+            +-------------------+-----------------------------------------------------+
+            | frame_apply       | function(s) applied to each data array to generate  |
+            |                   | final 2D image, can be callable or {idx: callable}  |
+            +-------------------+-----------------------------------------------------+
+            | figure_shape      | tuple for custom shape of the figure,               |
+            |                   | defaults to auto-estimation                         |
+            +-------------------+-----------------------------------------------------+
+            | figure_kwargs     | dictionary of arguments passed to GridPlot          |
+            +-------------------+-----------------------------------------------------+
+            | names             | optional list of names for subplots                 |
+            +-------------------+-----------------------------------------------------+
+            | histogram_widget  | boolean to create a histogram LUT widget per subplot|
+            +-------------------+-----------------------------------------------------+
+            | rgb               | boolean or list indicating if arrays are RGB(A)     |
+            +-------------------+-----------------------------------------------------+
+            | graphic_kwargs    | arguments passed to each ImageGraphic in subplots   |
+            +-------------------+-----------------------------------------------------+
+
+            https://www.fastplotlib.org/ver/dev/api/widgets/ImageWidget_api/fastplotlib.ImageWidget.html#fastplotlib.ImageWidget
+
+        data_grid_kwargs : dict, optional
+            Arguments passed to DataGrid. Valid options are:
+
+            +-------------------------+-----------------------------------------------------------+
+            | Argument                | Description                                               |
+            +=========================+===========================================================+
+            | base_row_size           | int, default: 20                                          |
+            |                         | Default row height                                        |
+            +-------------------------+-----------------------------------------------------------+
+            | base_column_size        | int, default: 64                                          |
+            |                         | Default column width                                      |
+            +-------------------------+-----------------------------------------------------------+
+            | base_row_header_size    | int, default: 64                                          |
+            |                         | Default row header width                                  |
+            +-------------------------+-----------------------------------------------------------+
+            | base_column_header_size | int, default: 20                                          |
+            |                         | Default column header height                              |
+            +-------------------------+-----------------------------------------------------------+
+            | header_visibility       | {'all', 'row', 'column', 'none'}, default: 'all'          |
+            |                         | Controls header visibility mode                           |
+            +-------------------------+-----------------------------------------------------------+
+            | dataframe               | pandas.DataFrame                                          |
+            |                         | Data displayed in the DataGrid                            |
+            +-------------------------+-----------------------------------------------------------+
+            | renderers               | dict                                                      |
+            |                         | Custom renderers for cells by column name                 |
+            +-------------------------+-----------------------------------------------------------+
+            | default_renderer        | CellRenderer, default: TextRenderer                       |
+            |                         | Default renderer for cell rendering                       |
+            +-------------------------+-----------------------------------------------------------+
+            | header_renderer         | CellRenderer, default: TextRenderer                       |
+            |                         | Renderer for header cells                                 |
+            +-------------------------+-----------------------------------------------------------+
+            | corner_renderer         | CellRenderer, default: TextRenderer                       |
+            |                         | Renderer for corner header cells                          |
+            +-------------------------+-----------------------------------------------------------+
+            | selection_mode          | {'row', 'column', 'cell', 'none'}, default: 'none'        |
+            |                         | Mode for cell selection by user or programmatically       |
+            +-------------------------+-----------------------------------------------------------+
+            | selections              | list of dict                                              |
+            |                         | Rectangular regions defined by row/column start & end     |
+            +-------------------------+-----------------------------------------------------------+
+            | editable                | bool, default: False                                      |
+            |                         | Enables direct cell editing                               |
+            +-------------------------+-----------------------------------------------------------+
+            | column_widths           | dict of {str: int}, default: {}                           |
+            |                         | Custom widths for columns by name                         |
+            +-------------------------+-----------------------------------------------------------+
+            | auto_fit_columns        | bool, default: False                                      |
+            |                         | Automatically adjust column widths                        |
+            +-------------------------+-----------------------------------------------------------+
+            | auto_fit_params         | dict                                                      |
+            |                         | Parameters for column auto-fitting                        |
+            +-------------------------+-----------------------------------------------------------+
+            | grid_style              | dict of {propertyName: str | VegaExpr | dict}             |
+            |                         | Global styling properties for the grid                    |
+            +-------------------------+-----------------------------------------------------------+
+            | index_name              | str, default: "key"                                       |
+            |                         | Name of the index column (set once at construction)       |
+            +-------------------------+-----------------------------------------------------------+
+            | horizontal_stripes      | bool, default: False                                      |
+            |                         | Themed coloring for alternate grid rows                   |
+            +-------------------------+-----------------------------------------------------------+
+            | vertical_stripes        | bool, default: false                                      |
+            |                         | themed coloring for alternate grid columns                |
+            +-------------------------+-----------------------------------------------------------+
+
+            https://github.com/jupyter-widgets/ipydatagrid/blob/main/ipydatagrid/datagrid.py#L260
         """
-        if data_options is None:
+        if image_data_options is None:
             # default viz
-            data_options = ["input", "mcorr", "mean", "corr"]
+            image_data_options = ["input", "mcorr", "mean", "corr"]
 
-        for d in data_options:
+        for d in image_data_options:
             if d not in VALID_DATA_OPTIONS:
                 raise KeyError(f"Invalid data option: \"{d}\", valid options are:"
                                f"\n{VALID_DATA_OPTIONS}")
@@ -166,7 +271,7 @@ class McorrVizContainer:
         )
 
         # data options is private since this can't be changed once an image widget has been made
-        self._data_options = data_options
+        self._image_data_options = image_data_options
 
         if input_movie_kwargs is None:
             input_movie_kwargs = dict()
@@ -178,7 +283,7 @@ class McorrVizContainer:
         default_iw_kwargs = {
             "window_funcs": {"t": (np.mean, 11)},
             "cmap": "gnuplot2",
-            "grid_plot_kwargs": {"size": (700, 600)},
+            "figure_kwargs": {"size": (700, 600)},
         }
 
         image_widget_kwargs = {
@@ -217,7 +322,7 @@ class McorrVizContainer:
 
         self._image_widget = ImageWidget(
             data=data_arrays,
-            names=self._data_options,
+            names=self._image_data_options,
             **self.image_widget_kwargs
         )
 
@@ -260,7 +365,7 @@ class McorrVizContainer:
         size = mcorr.size
 
         # go through all data options user has chosen
-        for option in self._data_options:
+        for option in self._image_data_options:
             func = data_mapping[option]
 
             if option == "input":
@@ -347,7 +452,7 @@ class McorrVizContainer:
 
         datagrid_params = HBox([self._datagrid, self._params_text_area])
 
-        if self._image_widget.gridplot.canvas.__class__.__name__ == "JupyterWgpuCanvas":
+        if self._image_widget.figure.canvas.__class__.__name__ == "JupyterWgpuCanvas":
             widget = VBox([
                     datagrid_params,
                     self._image_widget.show(sidecar=False),
@@ -355,7 +460,7 @@ class McorrVizContainer:
                 ])
 
             # TODO: remove monkeypatch once the autoscale bug is fixed in fastplotlib
-            self._image_widget.gridplot[0, 0].auto_scale()
+            self._image_widget.figure[0, 0].auto_scale()
 
             if not sidecar:
                 return widget
@@ -366,11 +471,11 @@ class McorrVizContainer:
             with self._sidecar:
                 return display(widget)
 
-        elif self._image_widget.gridplot.canvas.__class__.__name__ == "QWgpuCanvas":
+        elif self._image_widget.figure.canvas.__class__.__name__ == "QWgpuCanvas":
             # shown the image widget in Qt window
             self._image_widget.show()
             # TODO: remove monkeypatch once the autoscale bug is fixed in fastplotlib
-            self._image_widget.gridplot[0, 0].auto_scale(maintain_aspect=True)
+            self._image_widget.figure[0, 0].auto_scale(maintain_aspect=True)
             # return datagrid to show in jupyter
             return VBox([datagrid_params, self._slider_mean_window])
 
@@ -395,7 +500,7 @@ class MCorrDataFrameVizExtension:
 
     def viz(
             self,
-            data_options: List[str] = None,
+            image_data_options: List[str] = None,
             start_index: int = 0,
             reset_timepoint_on_change: bool = False,
             input_movie_kwargs=None,
@@ -407,7 +512,7 @@ class MCorrDataFrameVizExtension:
 
         Parameters
         ----------
-        data_options: list of str, default ["input", "mcorr", "mean", "corr"]
+        image_data_options: list of str, default ["input", "mcorr", "mean", "corr"]
             list of data options to plot, valid options are:
 
             +-------------+-------------------------------------+
@@ -445,7 +550,7 @@ class MCorrDataFrameVizExtension:
 
         container = McorrVizContainer(
             dataframe=self._dataframe,
-            data_options=data_options,
+            image_data_options=image_data_options,
             start_index=start_index,
             reset_timepoint_on_change=reset_timepoint_on_change,
             input_movie_kwargs=input_movie_kwargs,

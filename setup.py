@@ -3,8 +3,7 @@ from pathlib import Path
 
 
 install_requires = [
-    "fastplotlib[notebook]==0.1.0a16",
-    "pygfx==0.1.17",
+    "fastplotlib[notebook, imgui]>=0.3.0",
     "ipydatagrid",
     "tslearn",
 ]
