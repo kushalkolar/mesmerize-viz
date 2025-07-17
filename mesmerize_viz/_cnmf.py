@@ -883,7 +883,7 @@ class CNMFVizContainer:
     def set_component_colors(
             self,
             metric: Union[str, np.ndarray],
-            cmap: str = None,
+            cmap: Optional[str] = None,
     ):
         """
 
@@ -908,7 +908,7 @@ class CNMFVizContainer:
         n_contours = len(self._image_widget.gridplot[0, 0]["contours"])
 
         # use the random colors
-        if metric == "random":
+        if isinstance(metric, str) and metric == "random":
             for subplot in self._image_widget.gridplot:
                 for i, g in enumerate(subplot["contours"].graphics):
                     g.colors = self._random_colors[i]
@@ -917,7 +917,7 @@ class CNMFVizContainer:
                 self._set_component_visibility(subplot["contours"], cnmf_obj)
             return
 
-        if metric in ["accepted", "rejected"]:
+        if isinstance(metric, str) and metric in ["accepted", "rejected"]:
             if cmap is None:
                 cmap = "Set1"
 
@@ -930,7 +930,14 @@ class CNMFVizContainer:
             if cmap is None:
                 cmap = "spring"
 
-            if metric == "snr_comps":
+            if isinstance(metric, np.ndarray):
+                if not metric.size == n_contours:
+                    raise ValueError(f"If using np.ndarray cor component_colors, the array size must be "
+                                     f"the same as n_contours: {n_contours}, your array size is: {metric.size}")
+
+                classifier = metric
+
+            elif metric == "snr_comps":
                 classifier = cnmf_obj.estimates.SNR_comp
 
             elif metric == "snr_comps_log":
@@ -941,13 +948,6 @@ class CNMFVizContainer:
 
             elif metric == "cnn_preds":
                 classifier = cnmf_obj.estimates.cnn_preds
-
-            elif isinstance(metric, np.ndarray):
-                if not metric.size == n_contours:
-                    raise ValueError(f"If using np.ndarray cor component_colors, the array size must be "
-                                     f"the same as n_contours: {n_contours}, your array size is: {metric.size}")
-
-                classifier = metric
 
             else:
                 raise ValueError("Invalid colors value")
